@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg-deep: #0B1120;
+  --color-bg-surface: #131C31;
+  --color-gold-brass: #C9A227;
+  --color-coral-warm: #E8674A;
+  --color-sand-light: #E8DCC4;
+  --color-mist-white: #F5F3EE;
+  --font-display: var(--font-fraunces);
+  --font-body: var(--font-manrope);
+  --font-mono: var(--font-ibm-plex-mono);
+  --font-sans: var(--font-body);
+}
+
+:root {
+  --bg-deep: #0B1120;
+  --bg-surface: #131C31;
+  --gold-brass: #C9A227;
+  --coral-warm: #E8674A;
+  --sand-light: #E8DCC4;
+  --mist-white: #F5F3EE;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--sand-light);
+  font-family: var(--font-body), sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: var(--bg-deep);
+    --foreground: var(--sand-light);
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

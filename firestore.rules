@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /trips/{tripId} {
+      allow read: if resource.data.isPublic == true || (request.auth != null && resource.data.ownerId == request.auth.uid);
+      allow delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null 
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          "destination", 
+          "originAirportOrCity", 
+          "budget", 
+          "currency", 
+          "days", 
+          "totalEstCost", 
+          "isPublic", 
+          "ownerId", 
+          "createdAt", 
+          "updatedAt",
+          "enriched"
+        ]);
+      allow update: if request.auth != null 
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "destination", 
+          "originAirportOrCity", 
+          "budget", 
+          "currency", 
+          "days", 
+          "totalEstCost", 
+          "isPublic", 
+          "updatedAt",
+          "enriched"
+        ])
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.createdAt == resource.data.createdAt;
+    }
+  }
+}

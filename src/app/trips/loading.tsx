@@ -1,0 +1,1 @@
+export default function Loading() { return <div className="min-h-screen bg-bg-deep p-8"><div className="max-w-6xl mx-auto h-10 w-48 bg-bg-surface rounded animate-pulse mb-8" /><div className="grid grid-cols-1 sm:grid-cols-3 gap-6">{[1, 2, 3].map((item) => <div key={item} className="h-64 rounded-2xl bg-bg-surface animate-pulse" />)}</div></div>; }
