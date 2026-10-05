@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeString, sanitizeTripData, tripRequestSchema } from "./schemas";
-import { toTrip } from "./types";
+import { convertCurrency, formatCurrency, toTrip } from "./types";
 
 const validTrip = {
   destination: "Tokyo, Japan",
@@ -56,6 +56,71 @@ describe("tripRequestSchema", () => {
   it("rejects budgets outside range", () => {
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1, days: 3 }).success).toBe(false);
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3 }).success).toBe(true);
+  });
+
+  it("accepts the Hyderabad → Tokyo reference trip", () => {
+    const r = tripRequestSchema.safeParse({ destination: "Tokyo", origin: "Hyderabad", budget: 2000, days: 5, currency: "INR" });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects empty fields", () => {
+    expect(tripRequestSchema.safeParse({ destination: "", budget: 1000, days: 3 }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "x", budget: 1000, days: 3 }).success).toBe(false);
+  });
+
+  it("accepts special characters in destination", () => {
+    expect(tripRequestSchema.safeParse({ destination: "São Paulo! @#$%", budget: 1000, days: 3 }).success).toBe(true);
+  });
+
+  it("rejects long destinations", () => {
+    expect(tripRequestSchema.safeParse({ destination: "x".repeat(121), budget: 1000, days: 3 }).success).toBe(false);
+  });
+
+  it("rejects $0, negative, and huge budgets", () => {
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 0, days: 3 }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: -500, days: 3 }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 100000, days: 3 }).success).toBe(true);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 100001, days: 3 }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 9999999, days: 3 }).success).toBe(false);
+  });
+
+  it("rejects 0 days and 30 days, accepts 1 and 14", () => {
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 0 }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 1 }).success).toBe(true);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 14 }).success).toBe(true);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 30 }).success).toBe(false);
+  });
+
+  it("defaults currency to USD and accepts all supported codes", () => {
+    expect(tripRequestSchema.parse({ destination: "Tokyo", budget: 1000, days: 3 }).currency).toBe("USD");
+    for (const currency of ["USD", "INR", "EUR", "GBP"] as const) {
+      expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency }).success).toBe(true);
+    }
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency: "JPY" }).success).toBe(false);
+  });
+
+  it("accepts optional trip options", () => {
+    const r = tripRequestSchema.safeParse({
+      destination: "Tokyo", budget: 2000, days: 5,
+      options: { travelers: 2, accommodationLevel: "luxury", travelStyle: "packed", transportPreference: "private", travelDates: { start: "2026-11-01", end: "2026-11-05" } },
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
+describe("currency", () => {
+  it("converts amounts between currencies (not just the symbol)", () => {
+    expect(convertCurrency(100, "USD", "USD")).toBe(100);
+    expect(convertCurrency(83, "INR", "USD")).toBe(1);
+    expect(convertCurrency(1, "USD", "INR")).toBe(83);
+    expect(convertCurrency(2000, "USD", "INR")).toBe(166000);
+  });
+
+  it("formats with the right symbol", () => {
+    expect(formatCurrency(2000, "USD")).toContain("$");
+    expect(formatCurrency(166000, "INR")).toContain("₹");
+    expect(formatCurrency(100, "EUR")).toContain("€");
+    expect(formatCurrency(100, "GBP")).toContain("£");
   });
 });
 

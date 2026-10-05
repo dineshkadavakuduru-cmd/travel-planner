@@ -1,3 +1,30 @@
+export type Currency = "USD" | "INR" | "EUR" | "GBP";
+
+export interface CurrencyInfo {
+  code: Currency;
+  symbol: string;
+  name: string;
+  rateToUSD: number; // 1 USD = X of this currency
+}
+
+export const CURRENCIES: Record<Currency, CurrencyInfo> = {
+  USD: { code: "USD", symbol: "$", name: "US Dollar", rateToUSD: 1 },
+  INR: { code: "INR", symbol: "₹", name: "Indian Rupee", rateToUSD: 83 },
+  EUR: { code: "EUR", symbol: "€", name: "Euro", rateToUSD: 0.92 },
+  GBP: { code: "GBP", symbol: "£", name: "British Pound", rateToUSD: 0.79 },
+};
+
+export function convertCurrency(amount: number, from: Currency, to: Currency): number {
+  if (from === to) return amount;
+  const usdAmount = amount / CURRENCIES[from].rateToUSD;
+  return Math.round(usdAmount * CURRENCIES[to].rateToUSD);
+}
+
+export function formatCurrency(amount: number, currency: Currency): string {
+  const info = CURRENCIES[currency];
+  return `${info.symbol}${amount.toLocaleString()}`;
+}
+
 export interface Spot {
   name: string;
   description: string;
@@ -23,19 +50,32 @@ export interface DayPlan {
   food: FoodPick[];
 }
 
+export type TravelStyle = "relaxed" | "balanced" | "packed";
+export type AccommodationLevel = "budget" | "mid" | "luxury";
+export type TransportPreference = "public" | "mixed" | "private";
+
+export interface TripOptions {
+  travelDates?: { start: string; end: string };
+  travelers?: number;
+  accommodationLevel?: AccommodationLevel;
+  travelStyle?: TravelStyle;
+  transportPreference?: TransportPreference;
+}
+
 export interface Trip {
   id: string;
   ownerId?: string;
   destination: string;
   originAirportOrCity: string;
   budget: number;
-  currency: string;
+  currency: Currency;
   createdAt: Date | string;
   updatedAt?: Date | string;
   days: DayPlan[];
   totalEstCost: number;
   isPublic: boolean;
   enriched?: boolean;
+  options?: TripOptions;
 }
 
 /** Shape of the raw Firestore document (Timestamp fields not yet serialized). */
@@ -70,6 +110,8 @@ export interface GenerateItineraryRequest {
   origin: string;
   budget: number;
   days: number;
+  currency?: Currency;
+  options?: TripOptions;
 }
 
 export interface GenerateItineraryResponse {

@@ -23,13 +23,27 @@ const ibmPlexMono = IBM_Plex_Mono({
   weight: ["400", "500", "600"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://travel-planner-omega-eight.vercel.app";
+
 export const metadata: Metadata = {
-  title: { default: "Travel Planner", template: "%s | Travel Planner" },
-  description: "Build realistic, place-rich itineraries around your budget and travel style.",
+  title: { default: "Travel Planner — AI Day-by-Day Itineraries", template: "%s | Travel Planner" },
+  description: "Enter Hyderabad to Tokyo, a $2,000 budget, and 5 days — get a day-by-day itinerary with real places, food picks, routes, and budget tracking in INR, USD, EUR, or GBP.",
   applicationName: "Travel Planner",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
-  openGraph: { title: "Travel Planner", description: "Plan your next escape with a real itinerary.", type: "website" },
-  twitter: { card: "summary_large_image", title: "Travel Planner", description: "Plan your next escape with a real itinerary." },
+  metadataBase: new URL(siteUrl),
+  alternates: { canonical: "/" },
+  icons: { icon: "/favicon.ico" },
+  openGraph: {
+    title: "Travel Planner — AI Day-by-Day Itineraries",
+    description: "Real places, food picks, and routes within your budget. Plan Hyderabad → Tokyo in seconds.",
+    url: "/",
+    siteName: "Travel Planner",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Travel Planner — AI Day-by-Day Itineraries",
+    description: "Real places, food picks, and routes within your budget.",
+  },
 };
 
 export const viewport: Viewport = { themeColor: "#0B1120", width: "device-width", initialScale: 1 };
