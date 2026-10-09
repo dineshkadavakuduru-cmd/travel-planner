@@ -287,16 +287,19 @@ function HomeInner() {
               </div>
 
               <fieldset>
-                <legend className="font-mono text-sm text-gold-brass mb-2 uppercase tracking-wider">Currency</legend>
-                <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Currency">
+                <legend className="font-mono text-sm text-gold-brass mb-2 uppercase tracking-wider">
+                  Currency — budget, costs & itinerary use this
+                </legend>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" role="radiogroup" aria-label="Trip currency">
                   {CURRENCY_LIST.map((c) => (
                     <button
                       key={c}
                       type="button"
                       role="radio"
                       aria-checked={currency === c}
+                      aria-label={`Use ${CURRENCIES[c].name} (${c}) for budget and costs`}
                       onClick={() => handleCurrencyChange(c)}
-                      className={`font-mono text-sm px-3 py-2 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass ${currency === c ? "bg-gold-brass text-bg-deep border-gold-brass font-bold" : "border-sand-light/20 text-sand-light/70 hover:border-gold-brass/50"}`}
+                      className={`font-mono text-sm px-3 py-3 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass ${currency === c ? "bg-gold-brass text-bg-deep border-gold-brass font-bold" : "border-sand-light/20 text-sand-light/70 hover:border-gold-brass/50"}`}
                     >
                       {c} ({CURRENCIES[c].symbol})
                     </button>
@@ -338,6 +341,11 @@ function HomeInner() {
                   onChange={(e) => setBudget(Number(e.target.value))}
                   className="mt-3 w-full bg-bg-deep/50 border border-sand-light/20 rounded-lg px-4 py-2 text-sand-light font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gold-brass"
                 />
+                <p className="mt-2 font-mono text-xs text-sand-light/60" aria-live="polite">
+                  {currency === "USD"
+                    ? "Budget is in US dollars."
+                    : `${formatCurrency(budget, currency)} ≈ $${convertCurrency(Math.round(budget), currency, "USD").toLocaleString()} USD — the trip is planned and validated in this converted value.`}
+                </p>
                 {budgetError ? <p id="budget-error" role="alert" className="mt-2 font-mono text-xs text-coral-warm">{budgetError}</p> : null}
               </div>
 
