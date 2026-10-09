@@ -5,7 +5,7 @@ import { rateLimit } from "@/lib/rateLimit";
 import { validateEnv } from "@/lib/validateEnv";
 import { verifyIdToken } from "@/lib/auth";
 import type { ItineraryResponse, Trip } from "@/lib/types";
-import { CURRENCIES, convertCurrency } from "@/lib/types";
+import { convertCurrency } from "@/lib/types";
 
 const GENERATION_TIMEOUT_MS = 90000;
 const ENRICHMENT_TIMEOUT_MS = 15000;
@@ -149,7 +149,6 @@ Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommod
     }
 
     const totalEstCost = convertCurrency(Math.round(itinerary.totalEstCost), "USD", currency);
-    void CURRENCIES;
 
     const tripResponse: Trip = {
       id: "",

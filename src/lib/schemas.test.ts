@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeString, sanitizeTripData, tripRequestSchema } from "./schemas";
-import { convertCurrency, formatCurrency, toTrip } from "./types";
+import { convertCurrency, formatCurrency, resolveCurrency, toTrip } from "./types";
 
 const validTrip = {
   destination: "Tokyo, Japan",
@@ -140,6 +140,26 @@ describe("currency", () => {
     expect(formatCurrency(166000, "INR")).toContain("₹");
     expect(formatCurrency(100, "EUR")).toContain("€");
     expect(formatCurrency(100, "GBP")).toContain("£");
+  });
+
+  it("resolveCurrency falls back to USD for unknown/legacy values", () => {
+    expect(resolveCurrency("INR")).toBe("INR");
+    expect(resolveCurrency("USD")).toBe("USD");
+    expect(resolveCurrency("JPY")).toBe("USD");
+    expect(resolveCurrency(undefined)).toBe("USD");
+    expect(resolveCurrency(null)).toBe("USD");
+  });
+
+  it("saved-trip cards never render INR amounts with $", () => {
+    // Regression: trips/page rendered `${trip.budget}` regardless of currency.
+    // INR uses en-IN lakh grouping deterministically on every machine.
+    expect(formatCurrency(166000, resolveCurrency("INR"))).toBe("₹1,66,000");
+    expect(formatCurrency(166000, resolveCurrency(undefined))).toBe("$166,000");
+  });
+
+  it("formats deterministically regardless of host locale", () => {
+    expect(formatCurrency(2000, "USD")).toBe("$2,000");
+    expect(formatCurrency(83000, "INR")).toBe("₹83,000");
   });
 });
 

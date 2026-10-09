@@ -7,6 +7,14 @@ export interface CurrencyInfo {
   rateToUSD: number; // 1 USD = X of this currency
 }
 
+/**
+ * Exchange rates are STATIC reference rates (1 USD = X), reviewed manually.
+ * They are intentionally not fetched live: trip budgets must be deterministic
+ * and reproducible (validation, saved trips, share/export all reuse them).
+ * To update: change the numbers below — every surface (form, API validation,
+ * itinerary costs, saved-trip cards, export) follows automatically via
+ * convertCurrency/formatCurrency. No other file hardcodes a rate.
+ */
 export const CURRENCIES: Record<Currency, CurrencyInfo> = {
   USD: { code: "USD", symbol: "$", name: "US Dollar", rateToUSD: 1 },
   INR: { code: "INR", symbol: "₹", name: "Indian Rupee", rateToUSD: 83 },
@@ -20,9 +28,21 @@ export function convertCurrency(amount: number, from: Currency, to: Currency): n
   return Math.round(usdAmount * CURRENCIES[to].rateToUSD);
 }
 
+const LOCALE: Record<Currency, string> = {
+  USD: "en-US",
+  INR: "en-IN", // lakh/crore grouping: 1,66,000
+  EUR: "en-US",
+  GBP: "en-US",
+};
+
 export function formatCurrency(amount: number, currency: Currency): string {
   const info = CURRENCIES[currency];
-  return `${info.symbol}${amount.toLocaleString()}`;
+  return `${info.symbol}${amount.toLocaleString(LOCALE[currency])}`;
+}
+
+/** Coerce unknown stored values (e.g. pre-currency trips) to a valid code. */
+export function resolveCurrency(code: unknown): Currency {
+  return typeof code === "string" && code in CURRENCIES ? (code as Currency) : "USD";
 }
 
 export interface Spot {
