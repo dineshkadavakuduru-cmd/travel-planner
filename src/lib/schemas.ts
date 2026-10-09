@@ -1,7 +1,29 @@
 import { z } from "zod";
+import { convertCurrency } from "./types";
 
 export const CURRENCY_CODES = ["USD", "INR", "EUR", "GBP"] as const;
 export type Currency = (typeof CURRENCY_CODES)[number];
+
+/**
+ * Budget limits are defined in USD-equivalent: 200–100,000 USD.
+ * The raw `budget` field accepts a wide integer range so converted amounts
+ * (e.g. ₹166,000 ≈ $2,000) pass; the object-level refine enforces the real range.
+ */
+const RAW_BUDGET_MIN = 1;
+const RAW_BUDGET_MAX = 10000000;
+const USD_BUDGET_MIN = 200;
+const USD_BUDGET_MAX = 100000;
+
+function usdBudgetRefine(val: { budget: number; currency: Currency }, ctx: z.RefinementCtx) {
+  const usd = convertCurrency(Math.round(val.budget), val.currency, "USD");
+  if (usd < USD_BUDGET_MIN || usd > USD_BUDGET_MAX) {
+    ctx.addIssue({
+      code: "custom",
+      message: `Budget must equal USD ${USD_BUDGET_MIN}–${USD_BUDGET_MAX} (got ≈$${usd} for ${val.budget} ${val.currency})`,
+      path: ["budget"],
+    });
+  }
+}
 
 export const spotSchema = z.object({
   name: z.string().min(1).max(200),
@@ -47,23 +69,23 @@ export const tripOptionsSchema = z.object({
 export const tripRequestSchema = z.object({
   destination: z.string().trim().min(2).max(120),
   origin: z.string().trim().max(120).optional().default(""),
-  budget: z.number().int().min(200).max(100000),
+  budget: z.number().int().min(RAW_BUDGET_MIN).max(RAW_BUDGET_MAX),
   days: z.number().int().min(1).max(14),
   currency: z.enum(CURRENCY_CODES).default("USD"),
   options: tripOptionsSchema.optional(),
-});
+}).superRefine(usdBudgetRefine);
 
 export const tripSchema = z.object({
   destination: z.string().trim().min(2).max(120),
   originAirportOrCity: z.string().trim().max(120).optional().default(""),
-  budget: z.number().int().min(200).max(100000),
+  budget: z.number().int().min(RAW_BUDGET_MIN).max(RAW_BUDGET_MAX),
   currency: z.enum(CURRENCY_CODES).default("USD"),
   days: z.array(dayPlanSchema).min(1).max(14),
   totalEstCost: z.number().nonnegative().max(1000000),
   isPublic: z.boolean().default(false),
   enriched: z.boolean().optional().default(false),
   options: tripOptionsSchema.optional(),
-});
+}).superRefine(usdBudgetRefine);
 
 export function sanitizeString(input: string, maxLength: number): string {
   return input

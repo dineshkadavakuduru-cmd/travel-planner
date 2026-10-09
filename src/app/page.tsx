@@ -84,17 +84,18 @@ function HomeInner() {
   const { min: budgetMin, max: budgetMax, step: budgetStep } = useMemo(() => budgetBounds(currency), [currency]);
 
   // Convert the held budget when the user switches currency (not just the symbol).
+  // NOTE: conversion reads `currency` from closure and uses a pure budget
+  // updater — never nest setState updaters (StrictMode double-invokes them,
+  // which previously converted twice: 2000 USD -> 166000 -> clamped 830000).
   const handleCurrencyChange = useCallback((next: Currency) => {
-    setCurrency((prev) => {
-      if (prev === next) return prev;
-      setBudget((b) => {
-        const converted = convertCurrency(b, prev, next);
-        const { min, max } = budgetBounds(next);
-        return Math.min(max, Math.max(min, converted));
-      });
-      return next;
+    if (next === currency) return;
+    setBudget((b) => {
+      const converted = convertCurrency(b, currency, next);
+      const { min, max } = budgetBounds(next);
+      return Math.min(max, Math.max(min, converted));
     });
-  }, []);
+    setCurrency(next);
+  }, [currency]);
 
   useEffect(() => {
     const el = heroRef.current;
@@ -169,10 +170,11 @@ function HomeInner() {
     : destination.trim().length < 2 ? "Destination must be at least 2 characters."
     : destination.trim().length > 120 ? "Destination must be 120 characters or fewer."
     : null;
+  const budgetUSD = Number.isFinite(budget) ? convertCurrency(Math.round(budget), currency, "USD") : NaN;
   const budgetError = !touched ? null
-    : !Number.isFinite(budget) ? "Budget must be a number."
-    : budget < 200 ? `Budget must be at least ${formatCurrency(200, currency)} equivalent (${formatCurrency(budgetMin, currency)} here).`
-    : budget > 100000 ? "Budget must be 100,000 or less."
+    : !Number.isFinite(budgetUSD) ? "Budget must be a number."
+    : budgetUSD < 200 ? `Budget must equal at least USD 200 (≈${formatCurrency(convertCurrency(200, "USD", currency), currency)}).`
+    : budgetUSD > 100000 ? `Budget must equal at most USD 100,000 (≈${formatCurrency(convertCurrency(100000, "USD", currency), currency)}).`
     : null;
   const daysError = !touched ? null
     : !Number.isFinite(days) || days < 1 ? "Trip must be at least 1 day."
@@ -184,14 +186,15 @@ function HomeInner() {
       : dateStart && dateEnd && dateStart > dateEnd ? "End date must be after start date."
       : null;
 
-  const formValid = !destError && !budgetError && !daysError && !datesError && destination.trim().length >= 2;
+  const formValid = !destError && !budgetError && !daysError && !datesError && destination.trim().length >= 2 && Number.isFinite(budgetUSD);
 
   const handlePlanTrip = useCallback((e?: React.FormEvent) => {
     e?.preventDefault();
     setTouched(true);
     if (submitGuard.current || isGenerating) return; // duplicate-click guard
     if (destination.trim().length < 2 || destination.trim().length > 120) return;
-    if (!Number.isFinite(budget) || budget < 200 || budget > 100000) return;
+    const usd = Number.isFinite(budget) ? convertCurrency(Math.round(budget), currency, "USD") : NaN;
+    if (!Number.isFinite(usd) || usd < 200 || usd > 100000) return;
     if (!Number.isFinite(days) || days < 1 || days > 14) return;
     if ((dateStart || dateEnd) && (!/^\d{4}-\d{2}-\d{2}$/.test(dateStart) || !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd) || dateStart > dateEnd)) return;
     submitGuard.current = true;
@@ -329,8 +332,8 @@ function HomeInner() {
                   name="budget-number"
                   type="number"
                   inputMode="numeric"
-                  min={200}
-                  max={100000}
+                  min={1}
+                  max={10000000}
                   value={Number.isFinite(budget) ? budget : ""}
                   onChange={(e) => setBudget(Number(e.target.value))}
                   className="mt-3 w-full bg-bg-deep/50 border border-sand-light/20 rounded-lg px-4 py-2 text-sand-light font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gold-brass"

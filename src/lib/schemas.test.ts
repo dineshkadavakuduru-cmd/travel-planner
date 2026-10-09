@@ -59,8 +59,10 @@ describe("tripRequestSchema", () => {
   });
 
   it("accepts the Hyderabad → Tokyo reference trip", () => {
-    const r = tripRequestSchema.safeParse({ destination: "Tokyo", origin: "Hyderabad", budget: 2000, days: 5, currency: "INR" });
+    const r = tripRequestSchema.safeParse({ destination: "Tokyo", origin: "Hyderabad", budget: 2000, days: 5, currency: "USD" });
     expect(r.success).toBe(true);
+    const inr = tripRequestSchema.safeParse({ destination: "Tokyo", origin: "Hyderabad", budget: 166000, days: 5, currency: "INR" });
+    expect(inr.success).toBe(true);
   });
 
   it("rejects empty fields", () => {
@@ -84,6 +86,16 @@ describe("tripRequestSchema", () => {
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 9999999, days: 3 }).success).toBe(false);
   });
 
+  it("validates budgets in USD-equivalent across currencies", () => {
+    // $2,000 reference trip expressed in INR / EUR / GBP must pass.
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 166000, days: 5, currency: "INR" }).success).toBe(true);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1840, days: 5, currency: "EUR" }).success).toBe(true);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1580, days: 5, currency: "GBP" }).success).toBe(true);
+    // Dust amounts (≈$1) must fail in any currency.
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 100, days: 3, currency: "INR" }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1, days: 3, currency: "EUR" }).success).toBe(false);
+  });
+
   it("rejects 0 days and 30 days, accepts 1 and 14", () => {
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 0 }).success).toBe(false);
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 1 }).success).toBe(true);
@@ -93,8 +105,15 @@ describe("tripRequestSchema", () => {
 
   it("defaults currency to USD and accepts all supported codes", () => {
     expect(tripRequestSchema.parse({ destination: "Tokyo", budget: 1000, days: 3 }).currency).toBe("USD");
-    for (const currency of ["USD", "INR", "EUR", "GBP"] as const) {
-      expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency }).success).toBe(true);
+    // ≈$1,000 in each currency — all must pass the USD-equivalent range.
+    const perCurrency: Array<["USD" | "INR" | "EUR" | "GBP", number]> = [
+      ["USD", 1000],
+      ["INR", 83000],
+      ["EUR", 920],
+      ["GBP", 790],
+    ];
+    for (const [currency, budget] of perCurrency) {
+      expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget, days: 3, currency }).success).toBe(true);
     }
     expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency: "JPY" }).success).toBe(false);
   });

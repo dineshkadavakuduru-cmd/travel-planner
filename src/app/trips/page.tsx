@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
-import { getAuthClient } from "@/lib/firebase";
 import type { Trip } from "@/lib/types";
 
 export default function MyTripsPage() {
@@ -15,13 +14,15 @@ export default function MyTripsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) return;
+    const currentUser = user;
+    if (!currentUser) return;
     let cancelled = false;
     async function loadTrips() {
+      if (!currentUser) return;
       try {
-        const token = await getAuthClient().currentUser?.getIdToken();
+        const token = await currentUser.getIdToken();
         if (!token) throw new Error("Sign in to view your trips");
-        const response = await fetch(`/api/trips?userId=${encodeURIComponent(user?.uid || "")}`, { headers: { Authorization: `Bearer ${token}` } });
+        const response = await fetch(`/api/trips?userId=${encodeURIComponent(currentUser.uid)}`, { headers: { Authorization: `Bearer ${token}` } });
         if (!response.ok) throw new Error((await response.json()).error || "Failed to load trips");
         if (!cancelled) setTrips((await response.json()) as Trip[]);
       } catch (err) {
@@ -40,7 +41,9 @@ export default function MyTripsPage() {
     // Optimistic update with rollback on failure.
     setTrips((current) => current.filter((trip) => trip.id !== tripId));
     try {
-      const token = await getAuthClient().currentUser?.getIdToken();
+      const current = user;
+      if (!current) throw new Error("Sign in to delete trips");
+      const token = await current.getIdToken();
       if (!token) throw new Error("Sign in to delete trips");
       const response = await fetch(`/api/trips?tripId=${encodeURIComponent(tripId)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok) throw new Error((await response.json()).error || "Failed to delete trip");

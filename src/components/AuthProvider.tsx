@@ -24,25 +24,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const auth = getAuthClient();
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+    let auth;
+    try {
+      auth = getAuthClient();
+    } catch {
+      // Firebase not configured (missing NEXT_PUBLIC_FIREBASE_* env).
+      // Run in signed-out mode instead of crashing every page.
+      console.warn("Firebase is not configured; continuing without auth.");
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time init fallback, not a render loop
       setLoading(false);
-    });
+      return;
+    }
+    let unsubscribe: () => void = () => {};
+    try {
+      unsubscribe = onAuthStateChanged(auth, (user) => {
+        setUser(user);
+        setLoading(false);
+      });
+    } catch {
+      console.warn("Firebase auth listener failed; continuing without auth.");
+      setLoading(false);
+    }
 
     return () => unsubscribe();
   }, []);
 
   const signInWithGoogle = async () => {
-    const auth = getAuthClient();
-    if (!auth) return;
+    let auth;
+    try {
+      auth = getAuthClient();
+    } catch {
+      throw new Error("Sign-in is unavailable: Firebase is not configured.");
+    }
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
   };
 
   const logOut = async () => {
-    const auth = getAuthClient();
-    if (!auth) return;
+    let auth;
+    try {
+      auth = getAuthClient();
+    } catch {
+      return;
+    }
     await signOut(auth);
   };
 

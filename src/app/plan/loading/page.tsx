@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, use } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
+import { convertCurrency } from "@/lib/types";
 import type { TripOptions } from "@/lib/types";
 
 const CLIENT_TIMEOUT_MS = 95000;
@@ -73,12 +74,13 @@ function PlanLoadingInner({
     travelDates: validDates ? { start: travelDatesStart, end: travelDatesEnd } : undefined,
   }), [travelers, accommodationLevel, travelStyle, transportPreference, travelDatesStart, travelDatesEnd, validDates]);
 
+  const budgetUSD = Number.isFinite(budgetNum) ? convertCurrency(Math.round(budgetNum), currency, "USD") : NaN;
   const paramError = !rawDestination || rawDestination.length < 2
     ? "Please enter a destination (at least 2 characters)."
     : rawDestination.length > 120
       ? "Destination is too long (max 120 characters)."
-      : !Number.isFinite(budgetNum) || budget < 200 || budget > 100000
-        ? "Budget must be between 200 and 100,000."
+      : !Number.isFinite(budgetUSD) || budgetUSD < 200 || budgetUSD > 100000
+        ? "Budget must equal USD 200–100,000 in value."
         : !Number.isFinite(daysNum) || days < 1 || days > 14
           ? "Trip length must be between 1 and 14 days."
           : null;

@@ -22,7 +22,6 @@ let validated = false;
 
 export function validateEnv() {
   if (validated) return;
-  validated = true;
 
   const missing: string[] = [];
   const misconfigured: string[] = [];
@@ -50,6 +49,9 @@ export function validateEnv() {
     misconfigured.forEach((m) => console.warn(`  - ${m}`));
   }
 
+  // Only cache success: a failed validation must throw again next call,
+  // otherwise callers fall through to confusing downstream errors.
+  validated = true;
   console.log("✓ All required environment variables validated");
 }
 
