@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeString, sanitizeTripData, tripRequestSchema } from "./schemas";
-import { convertCurrency, formatCurrency, resolveCurrency, toTrip } from "./types";
+import {
+  CURRENT_TRIP_SCHEMA_VERSION,
+  convertCurrency,
+  formatCurrency,
+  fromMinorUnits,
+  migrateTrip,
+  resolveCurrency,
+  toMinorUnits,
+  toTrip,
+} from "./types";
 
 const validTrip = {
   destination: "Tokyo, Japan",
@@ -115,7 +124,7 @@ describe("tripRequestSchema", () => {
     for (const [currency, budget] of perCurrency) {
       expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget, days: 3, currency }).success).toBe(true);
     }
-    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency: "JPY" }).success).toBe(false);
+    expect(tripRequestSchema.safeParse({ destination: "Tokyo", budget: 1000, days: 3, currency: "XYZ" }).success).toBe(false);
   });
 
   it("accepts optional trip options", () => {
@@ -124,6 +133,14 @@ describe("tripRequestSchema", () => {
       options: { travelers: 2, accommodationLevel: "luxury", travelStyle: "packed", transportPreference: "private", travelDates: { start: "2026-11-01", end: "2026-11-05" } },
     });
     expect(r.success).toBe(true);
+  });
+
+  it("rejects travel dates whose end precedes the start", () => {
+    const bad = tripRequestSchema.safeParse({
+      destination: "Tokyo", budget: 2000, days: 5,
+      options: { travelDates: { start: "2026-11-05", end: "2026-11-01" } },
+    });
+    expect(bad.success).toBe(false);
   });
 });
 
@@ -135,17 +152,62 @@ describe("currency", () => {
     expect(convertCurrency(2000, "USD", "INR")).toBe(166000);
   });
 
-  it("formats with the right symbol", () => {
+  it("round-trips integer reference amounts exactly (no float drift)", () => {
+    for (const [currency, amount] of [
+      ["INR", 8300],
+      ["EUR", 92],
+      ["GBP", 79],
+      ["KWD", 30.7],
+      ["JPY", 15700],
+    ] as const) {
+      expect(convertCurrency(convertCurrency(100, "USD", currency), currency, "USD")).toBe(100);
+      expect(convertCurrency(convertCurrency(amount, currency, "USD"), "USD", currency)).toBe(amount);
+    }
+  });
+
+  it("handles zero and non-finite amounts without throwing or fabricating NaN math", () => {
+    expect(convertCurrency(0, "USD", "INR")).toBe(0);
+    expect(convertCurrency(0, "JPY", "KWD")).toBe(0);
+    expect(Number.isNaN(convertCurrency(NaN, "USD", "INR"))).toBe(true);
+    expect(convertCurrency(Infinity, "USD", "INR")).toBe(Infinity);
+  });
+
+  it("handles huge amounts without overflow", () => {
+    expect(convertCurrency(1_000_000_000, "USD", "INR")).toBe(83_000_000_000);
+    expect(Number.isFinite(convertCurrency(1e12, "INR", "USD"))).toBe(true);
+    expect(toMinorUnits(1e12, "USD")).toBe(BigInt(1e14));
+  });
+
+  it("respects 0-decimal (JPY) and 3-decimal (KWD) minor units", () => {
+    expect(convertCurrency(100, "USD", "JPY")).toBe(15700);
+    expect(convertCurrency(157, "JPY", "USD")).toBe(1);
+    expect(toMinorUnits(100, "JPY")).toBe(100n);
+    expect(convertCurrency(1, "USD", "KWD")).toBe(0.307);
+    expect(toMinorUnits(0.307, "KWD")).toBe(307n);
+    expect(fromMinorUnits(307n, "KWD")).toBe(0.307);
+  });
+
+  it("rounds half-up at the target currency precision", () => {
+    // 1 USD = 0.307 KWD, so 1 KWD = 3.257 USD -> 3.26 at 2 decimals.
+    expect(convertCurrency(1, "KWD", "USD")).toBe(3.26);
+    // 1 JPY = $0.006369... -> 0.01 at 2 decimals (half-up on the minor unit).
+    expect(convertCurrency(1, "JPY", "USD")).toBe(0.01);
+  });
+
+  it("formats with the right symbol and currency precision", () => {
     expect(formatCurrency(2000, "USD")).toContain("$");
     expect(formatCurrency(166000, "INR")).toContain("₹");
     expect(formatCurrency(100, "EUR")).toContain("€");
     expect(formatCurrency(100, "GBP")).toContain("£");
+    expect(formatCurrency(15700, "JPY")).toBe("¥15,700");
+    expect(formatCurrency(0.307, "KWD")).toBe("KD0.307");
   });
 
   it("resolveCurrency falls back to USD for unknown/legacy values", () => {
     expect(resolveCurrency("INR")).toBe("INR");
     expect(resolveCurrency("USD")).toBe("USD");
-    expect(resolveCurrency("JPY")).toBe("USD");
+    expect(resolveCurrency("KWD")).toBe("KWD");
+    expect(resolveCurrency("XYZ")).toBe("USD");
     expect(resolveCurrency(undefined)).toBe("USD");
     expect(resolveCurrency(null)).toBe("USD");
   });
@@ -160,6 +222,62 @@ describe("currency", () => {
   it("formats deterministically regardless of host locale", () => {
     expect(formatCurrency(2000, "USD")).toBe("$2,000");
     expect(formatCurrency(83000, "INR")).toBe("₹83,000");
+  });
+
+  it("formats non-finite amounts as a placeholder, never the string 'NaN'", () => {
+    expect(formatCurrency(NaN, "USD")).toBe("$—");
+    expect(formatCurrency(Infinity, "INR")).toBe("₹—");
+  });
+});
+
+describe("migrateTrip", () => {
+  const legacy = {
+    id: "legacy-1",
+    destination: "Goa, India",
+    originAirportOrCity: "Mumbai",
+    budget: 25000,
+    days: [{ dayNumber: 1, theme: "Beach", spots: [], food: [] }],
+    totalEstCost: 20000,
+    isPublic: false,
+    createdAt: "2025-01-01T00:00:00.000Z",
+    // no currency, no schemaVersion
+  };
+
+  it("fills a currency and stamps the current schema version on legacy trips", () => {
+    const trip = migrateTrip(legacy);
+    expect(trip).not.toBeNull();
+    expect(trip!.currency).toBe("USD");
+    expect(trip!.schemaVersion).toBe(CURRENT_TRIP_SCHEMA_VERSION);
+    expect(trip!.id).toBe("legacy-1");
+  });
+
+  it("returns null for corrupt data (non-object or missing days array)", () => {
+    expect(migrateTrip(null)).toBeNull();
+    expect(migrateTrip("nope")).toBeNull();
+    expect(migrateTrip({ destination: "x" })).toBeNull();
+    expect(migrateTrip({ destination: "x", days: "not-an-array" })).toBeNull();
+  });
+
+  it("drops malformed days and coerces bad numbers instead of crashing", () => {
+    const trip = migrateTrip({
+      destination: "  ",
+      days: [null, { theme: "no day number" }, { dayNumber: 2, spots: "x", food: null }],
+      budget: "abc",
+      totalEstCost: -5,
+    });
+    expect(trip).not.toBeNull();
+    expect(trip!.destination).toBe("Untitled trip");
+    expect(trip!.days).toHaveLength(1);
+    expect(trip!.days[0].dayNumber).toBe(2);
+    expect(trip!.days[0].spots).toEqual([]);
+    expect(trip!.days[0].food).toEqual([]);
+    expect(trip!.budget).toBe(0);
+    expect(trip!.totalEstCost).toBe(0);
+  });
+
+  it("preserves a valid stored currency", () => {
+    expect(migrateTrip({ ...legacy, currency: "INR" })!.currency).toBe("INR");
+    expect(migrateTrip({ ...legacy, currency: "KWD" })!.currency).toBe("KWD");
   });
 });
 

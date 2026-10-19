@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import type { DayPlan, FoodPick, Spot, Trip } from "@/lib/types";
-import { formatCurrency, type Currency } from "@/lib/types";
+import { formatCurrency, migrateTrip, resolveCurrency } from "@/lib/types";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -81,7 +81,7 @@ function DayMap({
 
   if (error || !mapImageUrl) {
     return (
-      <div className="w-full h-64 sm:h-80 rounded-lg overflow-hidden bg-bg-surface flex items-center justify-center text-sand-light/50">
+      <div className="w-full h-64 sm:h-80 rounded-lg overflow-hidden bg-bg-surface flex items-center justify-center text-sand-light/60">
         <span className="font-mono text-sm">{error || "Map unavailable"}</span>
       </div>
     );
@@ -148,15 +148,15 @@ function BoardingPassCard({ day, trip }: { day: DayPlan; trip: Trip }) {
             <span className="font-mono text-xs text-gold-brass uppercase tracking-widest">
               Day {String(day.dayNumber).padStart(2, "0")}
             </span>
-            <h3 className="font-display text-2xl sm:text-3xl font-bold text-sand-light mt-1">
+            <h3 className="font-display text-2xl sm:text-3xl font-bold text-sand-light mt-1 break-words">
               {day.theme}
             </h3>
           </div>
           <div className="mt-2 sm:mt-0 flex items-center gap-4">
             <div className="text-right">
-              <span className="font-mono text-xs text-sand-light/50 uppercase tracking-wider block">Budget / day</span>
+              <span className="font-mono text-xs text-sand-light/60 uppercase tracking-wider block">Budget / day</span>
               <span className="font-mono text-lg text-gold-brass">
-                {formatCurrency(Math.round(trip.budget / Math.max(1, trip.days.length)), (trip.currency as Currency) || "USD")}
+                {formatCurrency(Math.round(trip.budget / Math.max(1, trip.days.length)), resolveCurrency(trip.currency))}
               </span>
             </div>
           </div>
@@ -164,7 +164,7 @@ function BoardingPassCard({ day, trip }: { day: DayPlan; trip: Trip }) {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
-            <h4 className="font-mono text-xs text-sand-light/50 uppercase tracking-wider mb-4">
+            <h4 className="font-mono text-xs text-sand-light/60 uppercase tracking-wider mb-4">
               Stops ({day.spots.length})
             </h4>
             <div className="space-y-4">
@@ -173,10 +173,10 @@ function BoardingPassCard({ day, trip }: { day: DayPlan; trip: Trip }) {
                   <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gold-brass/20 flex items-center justify-center">
                     <span className="font-mono text-sm text-gold-brass font-bold">{i + 1}</span>
                   </div>
-                  <div>
-                    <h5 className="font-display font-semibold text-sand-light">{spot.name}</h5>
+                  <div className="min-w-0">
+                    <h5 className="font-display font-semibold text-sand-light break-words">{spot.name}</h5>
                     <p className="font-body text-sm text-sand-light/70 mt-1">{spot.description}</p>
-                    <span className="font-mono text-xs text-sand-light/40 mt-2 block">
+                    <span className="font-mono text-xs text-sand-light/60 mt-2 block">
                       ~{spot.estTimeMinutes} min
                     </span>
                   </div>
@@ -186,15 +186,15 @@ function BoardingPassCard({ day, trip }: { day: DayPlan; trip: Trip }) {
           </div>
 
           <div>
-            <h4 className="font-mono text-xs text-sand-light/50 uppercase tracking-wider mb-4">
+            <h4 className="font-mono text-xs text-sand-light/60 uppercase tracking-wider mb-4">
               Food Picks ({day.food.length})
             </h4>
             <div className="space-y-3">
               {day.food.map((food, i) => (
                 <div key={i} className="flex items-center justify-between p-3 bg-bg-deep/50 rounded-lg">
-                  <div>
-                    <h5 className="font-display font-semibold text-sand-light">{food.name}</h5>
-                    <span className="font-mono text-xs text-sand-light/50">{food.cuisine}</span>
+                  <div className="min-w-0">
+                    <h5 className="font-display font-semibold text-sand-light break-words">{food.name}</h5>
+                    <span className="font-mono text-xs text-sand-light/60">{food.cuisine}</span>
                   </div>
                   <span
                     className={`font-mono text-xs px-2 py-1 rounded-full ${
@@ -242,8 +242,8 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
         if (isLocalTrip) {
           const localTrip = localStorage.getItem(`trip_${tripId}`);
           if (!localTrip) throw new Error("Trip not found on this device. It may have been cleared — try regenerating.");
-          const parsed = JSON.parse(localTrip) as Trip;
-          if (!parsed || !Array.isArray(parsed.days)) throw new Error("Saved trip data is corrupt. Please regenerate.");
+          const parsed = migrateTrip(JSON.parse(localTrip));
+          if (!parsed) throw new Error("Saved trip data is corrupt. Please regenerate.");
           if (!cancelled) setTrip(parsed);
           return;
         }
@@ -252,7 +252,8 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!response.ok) throw new Error((await response.json()).error || "Trip not found");
-        const data = (await response.json()) as Trip;
+        const data = migrateTrip(await response.json());
+        if (!data) throw new Error("Saved trip data is corrupt. Please regenerate.");
         if (!cancelled) setTrip(data);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Trip not found");
@@ -264,10 +265,7 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
     return () => { cancelled = true; };
   }, [authLoading, tripId, user, isLocalTrip]);
 
-  const currency: Currency = useMemo(() => {
-    const c = trip?.currency as string;
-    return c === "INR" || c === "EUR" || c === "GBP" ? c : "USD";
-  }, [trip?.currency]);
+  const currency = useMemo(() => resolveCurrency(trip?.currency), [trip?.currency]);
 
   const orderedDays = useMemo(
     () => (trip ? [...trip.days].sort((a, b) => a.dayNumber - b.dayNumber) : []),
@@ -417,11 +415,11 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
       <div className="min-h-screen bg-bg-deep">
       <div className="border-b border-sand-light/10 bg-bg-surface/50 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-          <div>
-            <h1 className="font-display text-xl sm:text-2xl font-bold text-sand-light">
+          <div className="min-w-0">
+            <h1 className="font-display text-xl sm:text-2xl font-bold text-sand-light break-words">
               {trip.destination}
             </h1>
-            <p className="font-mono text-xs text-sand-light/50 mt-1">
+            <p className="font-mono text-xs text-sand-light/60 mt-1">
               {trip.days.length} DAYS · {formatCurrency(trip.budget, currency)} BUDGET
               {trip.options?.travelers && trip.options.travelers > 1 ? ` · ${trip.options.travelers} TRAVELERS` : ""}
               {trip.enriched ? " · VERIFIED PLACES" : ""}
@@ -466,11 +464,11 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
           {overBudget ? <p role="alert" className="mt-3 font-mono text-xs text-coral-warm">Estimated cost exceeds your budget by {formatCurrency(budgetUsed - trip.budget, currency)}. Consider fewer days or a higher budget.</p> : null}
           <div className="flex justify-between mt-4">
             <div>
-              <span className="font-mono text-xs text-sand-light/50 block">Used</span>
+              <span className="font-mono text-xs text-sand-light/60 block">Used</span>
               <span className="font-mono text-lg text-gold-brass">{formatCurrency(budgetUsed, currency)}</span>
             </div>
             <div className="text-right">
-              <span className="font-mono text-xs text-sand-light/50 block">Remaining</span>
+              <span className="font-mono text-xs text-sand-light/60 block">Remaining</span>
               <span className="font-mono text-lg text-sand-light/70">{formatCurrency(budgetRemaining, currency)}</span>
             </div>
           </div>
@@ -482,9 +480,22 @@ function TripDetail({ params }: { params: Promise<{ id: string }> }) {
             Your <span className="italic text-gold-brass">Itinerary</span>
           </h2>
           <div>
-            {orderedDays.map((day) => (
-              <BoardingPassCard key={day.dayNumber} day={day} trip={trip} />
-            ))}
+            {orderedDays.length === 0 ? (
+              <div className="bg-bg-surface border border-sand-light/10 rounded-2xl p-8 text-center">
+                <p className="font-display text-lg text-sand-light/80 mb-2">This trip has no days yet.</p>
+                <p className="font-body text-sm text-sand-light/60 mb-4">It may have failed to generate or been edited down to an empty itinerary.</p>
+                <button
+                  onClick={editTrip}
+                  className="font-mono text-xs px-4 py-2 border border-gold-brass/40 text-gold-brass rounded-lg hover:bg-gold-brass/10 transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass"
+                >
+                  Regenerate from the form
+                </button>
+              </div>
+            ) : (
+              orderedDays.map((day) => (
+                <BoardingPassCard key={day.dayNumber} day={day} trip={trip} />
+              ))
+            )}
           </div>
         </section>
       </main>

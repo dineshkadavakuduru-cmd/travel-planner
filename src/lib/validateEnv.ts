@@ -16,6 +16,7 @@ const REQUIRED_ENV_VARS = [
 const OPTIONAL_ENV_VARS = [
   "NEXT_PUBLIC_APP_URL",
   "NEXT_PUBLIC_GOOGLE_MAP_ID",
+  "EXCHANGE_RATE_API_KEY",
 ];
 
 let validated = false;
@@ -35,6 +36,13 @@ export function validateEnv() {
       if (value.includes("\\n") && !value.includes("\n")) {
         misconfigured.push(`${key} (appears to have literal \\n characters — ensure it's multiline in your env)`);
       }
+    }
+  }
+
+  for (const key of OPTIONAL_ENV_VARS) {
+    const value = process.env[key];
+    if (value && value.includes("your_")) {
+      misconfigured.push(`${key} is still set to its .env.example placeholder`);
     }
   }
 

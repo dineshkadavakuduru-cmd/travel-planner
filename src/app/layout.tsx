@@ -27,7 +27,7 @@ const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://travel-planner-omega
 
 export const metadata: Metadata = {
   title: { default: "Travel Planner — AI Day-by-Day Itineraries", template: "%s | Travel Planner" },
-  description: "Enter Hyderabad to Tokyo, a $2,000 budget, and 5 days — get a day-by-day itinerary with real places, food picks, routes, and budget tracking in INR, USD, EUR, or GBP.",
+  description: "Enter Hyderabad to Tokyo, a $2,000 budget, and 5 days — get a day-by-day itinerary with real places, food picks, routes, and budget tracking in USD, INR, EUR, GBP, JPY, or KWD.",
   applicationName: "Travel Planner",
   metadataBase: new URL(siteUrl),
   alternates: { canonical: "/" },

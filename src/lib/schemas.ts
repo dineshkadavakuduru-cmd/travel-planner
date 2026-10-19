@@ -1,22 +1,26 @@
 import { z } from "zod";
-import { convertCurrency } from "./types";
+import {
+  CURRENCY_CODES,
+  RAW_BUDGET_MAX,
+  RAW_BUDGET_MIN,
+  USD_BUDGET_MAX,
+  USD_BUDGET_MIN,
+  convertCurrency,
+} from "./types";
+import type { Currency } from "./types";
 
-export const CURRENCY_CODES = ["USD", "INR", "EUR", "GBP"] as const;
-export type Currency = (typeof CURRENCY_CODES)[number];
+export { CURRENCY_CODES };
+export type { Currency };
 
 /**
  * Budget limits are defined in USD-equivalent: 200–100,000 USD.
  * The raw `budget` field accepts a wide integer range so converted amounts
- * (e.g. ₹166,000 ≈ $2,000) pass; the object-level refine enforces the real range.
+ * (e.g. ¥15,700,000 ≈ $100,000) pass; the object-level refine enforces the
+ * real range.
  */
-const RAW_BUDGET_MIN = 1;
-const RAW_BUDGET_MAX = 10000000;
-const USD_BUDGET_MIN = 200;
-const USD_BUDGET_MAX = 100000;
-
 function usdBudgetRefine(val: { budget: number; currency: Currency }, ctx: z.RefinementCtx) {
   const usd = convertCurrency(Math.round(val.budget), val.currency, "USD");
-  if (usd < USD_BUDGET_MIN || usd > USD_BUDGET_MAX) {
+  if (!Number.isFinite(usd) || usd < USD_BUDGET_MIN || usd > USD_BUDGET_MAX) {
     ctx.addIssue({
       code: "custom",
       message: `Budget must equal USD ${USD_BUDGET_MIN}–${USD_BUDGET_MAX} (got ≈$${usd} for ${val.budget} ${val.currency})`,
@@ -59,6 +63,9 @@ export const tripOptionsSchema = z.object({
   travelDates: z.object({
     start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }).refine((d) => d.start <= d.end, {
+    message: "End date must be on or after the start date",
+    path: ["end"],
   }).optional(),
   travelers: z.number().int().min(1).max(20).optional().default(1),
   accommodationLevel: z.enum(["budget", "mid", "luxury"]).optional().default("mid"),
@@ -85,6 +92,7 @@ export const tripSchema = z.object({
   isPublic: z.boolean().default(false),
   enriched: z.boolean().optional().default(false),
   options: tripOptionsSchema.optional(),
+  schemaVersion: z.number().int().positive().optional(),
 }).superRefine(usdBudgetRefine);
 
 export function sanitizeString(input: string, maxLength: number): string {

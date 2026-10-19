@@ -17,7 +17,9 @@ service cloud.firestore {
           "ownerId", 
           "createdAt", 
           "updatedAt",
-          "enriched"
+          "enriched",
+          "options",
+          "schemaVersion"
         ]);
       allow update: if request.auth != null 
         && resource.data.ownerId == request.auth.uid
@@ -30,7 +32,9 @@ service cloud.firestore {
           "totalEstCost", 
           "isPublic", 
           "updatedAt",
-          "enriched"
+          "enriched",
+          "options",
+          "schemaVersion"
         ])
         && request.resource.data.ownerId == resource.data.ownerId
         && request.resource.data.createdAt == resource.data.createdAt;

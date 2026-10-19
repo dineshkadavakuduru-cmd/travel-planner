@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { verifyIdToken } from "@/lib/auth";
 import { getAdminFirestoreClient } from "@/lib/adminFirestore";
 import { sanitizeTripData } from "@/lib/schemas";
-import { toTrip } from "@/lib/types";
+import { migrateTrip } from "@/lib/types";
 
 function unauthorized() {
   return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -55,14 +55,20 @@ export async function GET(request: Request) {
         if (!decoded) return unauthorized();
         return NextResponse.json({ error: "Trip not found" }, { status: 404 });
       }
-      return NextResponse.json({ id: snapshot.id, ...tripData });
+      // Migrate legacy/corrupt documents before they reach the client.
+      const trip = migrateTrip({ id: snapshot.id, ...tripData });
+      if (!trip) {
+        return NextResponse.json({ error: "Trip data is corrupt and cannot be displayed" }, { status: 404 });
+      }
+      return NextResponse.json(trip);
     }
 
     if (!decoded) return unauthorized();
 
     const snapshot = await db.collection("trips").where("ownerId", "==", decoded.uid).limit(50).get();
     const trips = snapshot.docs
-      .map((doc) => toTrip({ id: doc.id }, doc.data()))
+      .map((doc) => migrateTrip({ id: doc.id, ...doc.data() }))
+      .filter((trip): trip is NonNullable<typeof trip> => trip !== null)
       .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
     return NextResponse.json(trips);
   } catch (error) {

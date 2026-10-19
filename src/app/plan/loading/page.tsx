@@ -3,8 +3,8 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, use } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { convertCurrency } from "@/lib/types";
-import type { TripOptions } from "@/lib/types";
+import { CURRENCY_CODES, USD_BUDGET_MAX, USD_BUDGET_MIN, convertCurrency } from "@/lib/types";
+import type { Currency, TripOptions } from "@/lib/types";
 
 const CLIENT_TIMEOUT_MS = 95000;
 
@@ -55,7 +55,7 @@ function PlanLoadingInner({
   const budget = Number.isFinite(budgetNum) ? Math.round(budgetNum) : 1000;
   const daysNum = Number(params.days);
   const days = Number.isFinite(daysNum) ? Math.round(daysNum) : 3;
-  const currency = (["USD", "INR", "EUR", "GBP"] as const).includes(params.currency as "USD") ? (params.currency as "USD" | "INR" | "EUR" | "GBP") : "USD";
+  const currency: Currency = (CURRENCY_CODES as readonly string[]).includes(params.currency ?? "") ? (params.currency as Currency) : "USD";
   const travelersNum = Number(params.travelers);
   const travelers = Number.isFinite(travelersNum) ? Math.min(20, Math.max(1, Math.round(travelersNum))) : 1;
   const accommodationLevel = (["budget", "mid", "luxury"] as const).includes(params.accommodationLevel as "mid") ? (params.accommodationLevel as "budget" | "mid" | "luxury") : "mid";
@@ -79,8 +79,8 @@ function PlanLoadingInner({
     ? "Please enter a destination (at least 2 characters)."
     : rawDestination.length > 120
       ? "Destination is too long (max 120 characters)."
-      : !Number.isFinite(budgetUSD) || budgetUSD < 200 || budgetUSD > 100000
-        ? "Budget must equal USD 200–100,000 in value."
+      : !Number.isFinite(budgetUSD) || budgetUSD < USD_BUDGET_MIN || budgetUSD > USD_BUDGET_MAX
+        ? `Budget must equal USD ${USD_BUDGET_MIN}–${USD_BUDGET_MAX.toLocaleString("en-US")} in value.`
         : !Number.isFinite(daysNum) || days < 1 || days > 14
           ? "Trip length must be between 1 and 14 days."
           : null;

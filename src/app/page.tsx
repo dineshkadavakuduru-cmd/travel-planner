@@ -7,7 +7,18 @@ import dynamic from "next/dynamic";
 import ParticleLayer from "@/components/ParticleLayer";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { CURRENCIES, convertCurrency, formatCurrency, type Currency } from "@/lib/types";
+import {
+  CURRENCIES,
+  CURRENCY_CODES,
+  RAW_BUDGET_MAX,
+  RAW_BUDGET_MIN,
+  USD_BUDGET_MAX,
+  USD_BUDGET_MIN,
+  convertCurrency,
+  formatCurrency,
+  type Currency,
+} from "@/lib/types";
+import { useExchangeRates, usdEquivalentAtMarketRate } from "@/lib/useExchangeRates";
 
 const GlobeScene = dynamic(() => import("@/components/Globe"), {
   ssr: false,
@@ -16,7 +27,7 @@ const GlobeScene = dynamic(() => import("@/components/Globe"), {
 
 gsap.registerPlugin(ScrollTrigger);
 
-const CURRENCY_LIST: Currency[] = ["USD", "INR", "EUR", "GBP"];
+const CURRENCY_LIST = CURRENCY_CODES;
 
 const POPULAR_TRIPS: Array<{
   destination: string;
@@ -31,22 +42,42 @@ const POPULAR_TRIPS: Array<{
 ];
 
 function budgetBounds(currency: Currency) {
-  const min = convertCurrency(200, "USD", currency);
-  const max = convertCurrency(10000, "USD", currency);
-  const step = currency === "INR" ? 500 : currency === "USD" ? 50 : 20;
+  // Slider bounds are the USD-equivalent limits, expressed in the currency and
+  // rounded inward so the whole-number slider can never sit outside the range.
+  const min = Math.ceil(convertCurrency(USD_BUDGET_MIN, "USD", currency));
+  const max = Math.floor(convertCurrency(USD_BUDGET_MAX, "USD", currency));
+  const step =
+    currency === "INR" ? 500
+    : currency === "JPY" ? 5000
+    : currency === "KWD" ? 5
+    : currency === "USD" ? 50
+    : 20;
   return { min, max, step };
+}
+
+function formatRateTimestamp(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(ms);
+  return `${formatted} UTC`;
 }
 
 function HomeInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const getParam = useCallback((k: string) => searchParams.get(k) ?? "", [searchParams]);
+  const { data: marketRates } = useExchangeRates();
 
   const [destination, setDestination] = useState(() => getParam("destination"));
   const [origin, setOrigin] = useState(() => getParam("origin"));
   const [currency, setCurrency] = useState<Currency>(() => {
     const c = getParam("currency").toUpperCase();
-    return (CURRENCY_LIST as string[]).includes(c) ? (c as Currency) : "USD";
+    return (CURRENCY_LIST as readonly string[]).includes(c) ? (c as Currency) : "USD";
   });
   const [budget, setBudget] = useState<number>(() => {
     const b = Number(getParam("budget"));
@@ -90,7 +121,7 @@ function HomeInner() {
   const handleCurrencyChange = useCallback((next: Currency) => {
     if (next === currency) return;
     setBudget((b) => {
-      const converted = convertCurrency(b, currency, next);
+      const converted = Math.round(convertCurrency(b, currency, next));
       const { min, max } = budgetBounds(next);
       return Math.min(max, Math.max(min, converted));
     });
@@ -173,8 +204,8 @@ function HomeInner() {
   const budgetUSD = Number.isFinite(budget) ? convertCurrency(Math.round(budget), currency, "USD") : NaN;
   const budgetError = !touched ? null
     : !Number.isFinite(budgetUSD) ? "Budget must be a number."
-    : budgetUSD < 200 ? `Budget must equal at least USD 200 (≈${formatCurrency(convertCurrency(200, "USD", currency), currency)}).`
-    : budgetUSD > 100000 ? `Budget must equal at most USD 100,000 (≈${formatCurrency(convertCurrency(100000, "USD", currency), currency)}).`
+    : budgetUSD < USD_BUDGET_MIN ? `Budget must equal at least USD ${USD_BUDGET_MIN} (≈${formatCurrency(convertCurrency(USD_BUDGET_MIN, "USD", currency), currency)}).`
+    : budgetUSD > USD_BUDGET_MAX ? `Budget must equal at most USD ${USD_BUDGET_MAX.toLocaleString("en-US")} (≈${formatCurrency(convertCurrency(USD_BUDGET_MAX, "USD", currency), currency)}).`
     : null;
   const daysError = !touched ? null
     : !Number.isFinite(days) || days < 1 ? "Trip must be at least 1 day."
@@ -188,13 +219,30 @@ function HomeInner() {
 
   const formValid = !destError && !budgetError && !daysError && !datesError && destination.trim().length >= 2 && Number.isFinite(budgetUSD);
 
+  // Deterministic reference conversion used for planning/validation, plus the
+  // optional live market-rate line. Both are guarded so we never render NaN.
+  const referenceUsd = Number.isFinite(budget) ? convertCurrency(Math.round(budget), currency, "USD") : null;
+  const marketUsd = usdEquivalentAtMarketRate(Math.round(budget), currency, marketRates);
+  const marketRate = currency === "USD" ? null : marketRates?.rates[currency];
+  const marketStamp = formatRateTimestamp(marketRates?.updatedAt ?? null);
+  const showMarketLine =
+    currency !== "USD" &&
+    marketUsd !== null &&
+    typeof marketRate === "number" &&
+    Number.isFinite(marketRate) &&
+    marketRates?.source !== "static" &&
+    marketStamp !== null;
+  const marketRateText = showMarketLine && typeof marketRate === "number"
+    ? formatCurrency(marketRate, currency)
+    : null;
+
   const handlePlanTrip = useCallback((e?: React.FormEvent) => {
     e?.preventDefault();
     setTouched(true);
     if (submitGuard.current || isGenerating) return; // duplicate-click guard
     if (destination.trim().length < 2 || destination.trim().length > 120) return;
     const usd = Number.isFinite(budget) ? convertCurrency(Math.round(budget), currency, "USD") : NaN;
-    if (!Number.isFinite(usd) || usd < 200 || usd > 100000) return;
+    if (!Number.isFinite(usd) || usd < USD_BUDGET_MIN || usd > USD_BUDGET_MAX) return;
     if (!Number.isFinite(days) || days < 1 || days > 14) return;
     if ((dateStart || dateEnd) && (!/^\d{4}-\d{2}-\d{2}$/.test(dateStart) || !/^\d{4}-\d{2}-\d{2}$/.test(dateEnd) || dateStart > dateEnd)) return;
     submitGuard.current = true;
@@ -220,7 +268,7 @@ function HomeInner() {
   const applyPopularTrip = useCallback((t: typeof POPULAR_TRIPS[number]) => {
     setDestination(t.destination);
     setDays(t.days);
-    setBudget(convertCurrency(t.budgetUSD, "USD", currency));
+    setBudget(Math.round(convertCurrency(t.budgetUSD, "USD", currency)));
     setTouched(false);
   }, [currency]);
 
@@ -244,7 +292,7 @@ function HomeInner() {
             <div className="space-y-6">
               <div>
                 <label htmlFor="origin" className="block font-mono text-sm text-gold-brass mb-2 uppercase tracking-wider">
-                  Departing from <span className="text-sand-light/40 normal-case">(optional)</span>
+                  Departing from <span className="text-sand-light/60 normal-case">(optional)</span>
                 </label>
                 <input
                   id="origin"
@@ -290,20 +338,31 @@ function HomeInner() {
                 <legend className="font-mono text-sm text-gold-brass mb-2 uppercase tracking-wider">
                   Currency — budget, costs & itinerary use this
                 </legend>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" role="radiogroup" aria-label="Trip currency">
-                  {CURRENCY_LIST.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      role="radio"
-                      aria-checked={currency === c}
-                      aria-label={`Use ${CURRENCIES[c].name} (${c}) for budget and costs`}
-                      onClick={() => handleCurrencyChange(c)}
-                      className={`font-mono text-sm px-3 py-3 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass ${currency === c ? "bg-gold-brass text-bg-deep border-gold-brass font-bold" : "border-sand-light/20 text-sand-light/70 hover:border-gold-brass/50"}`}
-                    >
-                      {c} ({CURRENCIES[c].symbol})
-                    </button>
-                  ))}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {CURRENCY_LIST.map((c) => {
+                    const selected = currency === c;
+                    return (
+                      <label
+                        key={c}
+                        className={`font-mono text-sm px-3 py-3 rounded-lg border text-center cursor-pointer transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-gold-brass ${
+                          selected
+                            ? "bg-gold-brass text-bg-deep border-gold-brass font-bold"
+                            : "border-sand-light/20 text-sand-light/70 hover:border-gold-brass/50"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="currency"
+                          value={c}
+                          checked={selected}
+                          onChange={() => handleCurrencyChange(c)}
+                          className="sr-only"
+                        />
+                        <span className="sr-only">{`Use ${CURRENCIES[c].name} (${c})`}</span>
+                        <span aria-hidden="true">{c} ({CURRENCIES[c].symbol})</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </fieldset>
 
@@ -335,17 +394,28 @@ function HomeInner() {
                   name="budget-number"
                   type="number"
                   inputMode="numeric"
-                  min={1}
-                  max={10000000}
+                  min={RAW_BUDGET_MIN}
+                  max={RAW_BUDGET_MAX}
                   value={Number.isFinite(budget) ? budget : ""}
                   onChange={(e) => setBudget(Number(e.target.value))}
                   className="mt-3 w-full bg-bg-deep/50 border border-sand-light/20 rounded-lg px-4 py-2 text-sand-light font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gold-brass"
                 />
-                <p className="mt-2 font-mono text-xs text-sand-light/60" aria-live="polite">
-                  {currency === "USD"
-                    ? "Budget is in US dollars."
-                    : `${formatCurrency(budget, currency)} ≈ $${convertCurrency(Math.round(budget), currency, "USD").toLocaleString()} USD — the trip is planned and validated in this converted value.`}
-                </p>
+                <div className="mt-2 font-mono text-xs text-sand-light/60" aria-live="polite">
+                  <p>
+                    {currency === "USD"
+                      ? "Budget is in US dollars."
+                      : referenceUsd !== null
+                        ? `${formatCurrency(budget, currency)} ≈ ${formatCurrency(referenceUsd, "USD")} USD — the trip is planned and validated in this converted value.`
+                        : "Enter a budget to see its USD equivalent."}
+                  </p>
+                  {marketRateText ? (
+                    <p className="mt-1 text-sand-light/60">
+                      Market rate: $1 ≈ {marketRateText}
+                      {marketStamp ? ` · as of ${marketStamp}` : ""}
+                      {marketRates?.stale ? " (cached)" : ""} — market estimate only.
+                    </p>
+                  ) : null}
+                </div>
                 {budgetError ? <p id="budget-error" role="alert" className="mt-2 font-mono text-xs text-coral-warm">{budgetError}</p> : null}
               </div>
 
@@ -371,7 +441,7 @@ function HomeInner() {
                   </div>
                   <div>
                     <label htmlFor="date-end" className="block font-mono text-xs text-sand-light/70 mb-1 uppercase">End date</label>
-                    <input id="date-end" name="date-end" type="date" value={dateEnd} onChange={(e) => setDateEnd(e.target.value)} className="w-full bg-bg-deep/50 border border-sand-light/20 rounded-lg px-3 py-2 text-sand-light font-body text-sm focus:outline-none focus:ring-2 focus:ring-gold-brass" />
+                    <input id="date-end" name="date-end" type="date" min={dateStart || undefined} value={dateEnd} onChange={(e) => setDateEnd(e.target.value)} className="w-full bg-bg-deep/50 border border-sand-light/20 rounded-lg px-3 py-2 text-sand-light font-body text-sm focus:outline-none focus:ring-2 focus:ring-gold-brass" />
                   </div>
                   <div>
                     <label htmlFor="travelers" className="block font-mono text-xs text-sand-light/70 mb-1 uppercase">Travelers</label>
@@ -420,7 +490,7 @@ function HomeInner() {
             <h2 className="font-display text-2xl sm:text-3xl font-semibold text-sand-light mb-2 text-center">
               Popular <span className="italic text-gold-brass">trips</span>
             </h2>
-            <p className="font-mono text-xs text-sand-light/50 mb-6 text-center uppercase tracking-wider">Sample ideas — select one to pre-fill the form</p>
+            <p className="font-mono text-xs text-sand-light/60 mb-6 text-center uppercase tracking-wider">Sample ideas — select one to pre-fill the form</p>
             <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-hide justify-center sm:justify-start flex-wrap sm:flex-nowrap">
               {POPULAR_TRIPS.map((trip) => (
                 <button
@@ -440,15 +510,15 @@ function HomeInner() {
                   <div className="p-4">
                     <p className="font-body text-xs text-sand-light/60 mb-2">{trip.blurb}</p>
                     <div className="flex justify-between items-center mb-2">
-                      <span className="font-mono text-xs text-sand-light/50 uppercase tracking-wider">
+                      <span className="font-mono text-xs text-sand-light/60 uppercase tracking-wider">
                         {trip.days} Days
                       </span>
                       <span className="font-mono text-sm text-gold-brass">{formatCurrency(convertCurrency(trip.budgetUSD, "USD", currency), currency)}</span>
                     </div>
                     <div className="h-px bg-sand-light/10 mb-3"></div>
                     <div className="flex justify-between items-center">
-                      <span className="font-mono text-xs text-sand-light/40">SAMPLE</span>
-                      <span className="font-mono text-xs text-sand-light/40">DAY 01 · {formatCurrency(convertCurrency(trip.budgetUSD, "USD", currency), currency)}</span>
+                      <span className="font-mono text-xs text-sand-light/60">SAMPLE</span>
+                      <span className="font-mono text-xs text-sand-light/60">DAY 01 · {formatCurrency(convertCurrency(trip.budgetUSD, "USD", currency), currency)}</span>
                     </div>
                   </div>
                 </button>
