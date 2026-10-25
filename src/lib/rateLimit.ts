@@ -45,11 +45,18 @@ export async function rateLimit(key: string, limit: number, windowMs: number) {
   }
 
   const identifier = `${key}:${limit}:${windowMs}`;
-  const result = await rl.limit(identifier);
+  try {
+    const result = await rl.limit(identifier);
 
-  return {
-    allowed: result.success,
-    remaining: result.remaining,
-    retryAfter: result.reset ? Math.ceil((result.reset - Date.now()) / 1000) : undefined,
-  };
+    return {
+      allowed: result.success,
+      remaining: result.remaining,
+      retryAfter: result.reset ? Math.ceil((result.reset - Date.now()) / 1000) : undefined,
+    };
+  } catch (error) {
+    // A rate-limit provider outage must not take down generation. Fail open
+    // (matching the unconfigured behavior) and log so it is still visible.
+    console.warn("Rate limit check failed; allowing request:", error instanceof Error ? error.message : error);
+    return { allowed: true, remaining: limit - 1 };
+  }
 }

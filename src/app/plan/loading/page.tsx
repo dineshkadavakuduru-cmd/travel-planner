@@ -45,6 +45,7 @@ function PlanLoadingInner({
   const [stageIndex, setStageIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready">("loading");
   const hasGeneratedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -104,6 +105,7 @@ function PlanLoadingInner({
     if (hasGeneratedRef.current && !isRetry) return;
     hasGeneratedRef.current = true;
     setError(null);
+    setStatus("loading");
     setIsRetrying(true);
     startTimeRef.current = Date.now();
 
@@ -165,6 +167,10 @@ function PlanLoadingInner({
           throw new Error("Generated, but browser storage is full. Sign in to save instead.");
         }
       }
+      // Success: show a distinct "ready" state briefly so the transition into
+      // the itinerary is legible instead of an unexplained jump.
+      setStatus("ready");
+      await new Promise((resolve) => setTimeout(resolve, 450));
       router.push(`/trip/${tripId}`);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -198,9 +204,18 @@ function PlanLoadingInner({
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-deep">
-        <div className="text-center max-w-md px-4" role="alert">
-          <p className="font-display text-2xl text-coral-warm mb-6">{error}</p>
+      <div className="min-h-screen flex items-center justify-center bg-bg-deep px-4">
+        <div className="text-center max-w-md" role="alert" aria-live="assertive">
+          <p className="font-mono text-xs text-gold-brass uppercase tracking-widest mb-3">
+            No itinerary generated
+          </p>
+          <h2 className="font-display text-2xl sm:text-3xl font-bold text-sand-light mb-4">
+            We couldn&apos;t chart this trip
+          </h2>
+          <p className="font-body text-sm text-coral-warm mb-3">{error}</p>
+          <p className="font-mono text-xs text-sand-light/60 mb-6">
+            Your itinerary was not created. Retry the same trip, or edit your details first.
+          </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
               onClick={handleRetry}
@@ -221,20 +236,34 @@ function PlanLoadingInner({
     );
   }
 
-  const currentMessage = STAGES[Math.min(stageIndex, STAGES.length - 1)].replace(
-    "{destination}",
-    destination
-  );
+  const isReady = status === "ready";
+  const currentMessage = isReady
+    ? "Your itinerary is ready — opening your plan..."
+    : STAGES[Math.min(stageIndex, STAGES.length - 1)].replace("{destination}", destination);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg-deep">
-      <div className="text-center max-w-md px-4">
+    <div className="min-h-screen flex items-center justify-center bg-bg-deep px-4">
+      <div className="text-center max-w-md">
         <div className="mb-8">
-          <div className="w-16 h-16 border-2 border-gold-brass border-t-transparent rounded-full animate-spin mx-auto mb-6" role="status" aria-label="Generating itinerary"></div>
+          {isReady ? (
+            <div
+              className="w-16 h-16 rounded-full border-2 border-gold-brass flex items-center justify-center mx-auto mb-6"
+              role="status"
+              aria-label="Itinerary ready"
+            >
+              <span className="w-4 h-4 rounded-full bg-gold-brass" aria-hidden="true" />
+            </div>
+          ) : (
+            <div
+              className="w-16 h-16 border-2 border-gold-brass border-t-transparent rounded-full animate-spin mx-auto mb-6"
+              role="status"
+              aria-label="Generating itinerary"
+            />
+          )}
           <h2 className="font-display text-3xl font-bold text-sand-light mb-4">
-            Charting your course
+            {isReady ? "Course charted" : "Charting your course"}
           </h2>
-          <p className="font-mono text-sm text-sand-light/70">
+          <p className="font-mono text-sm text-sand-light/70" aria-live="polite">
             {currentMessage}
           </p>
         </div>
@@ -243,7 +272,7 @@ function PlanLoadingInner({
             <div
               key={i}
               className={`h-1 rounded-full transition-all duration-500 ${
-                i <= stageIndex ? "w-8 bg-gold-brass" : "w-4 bg-sand-light/20"
+                isReady || i <= stageIndex ? "w-8 bg-gold-brass" : "w-4 bg-sand-light/20"
               }`}
             ></div>
           ))}

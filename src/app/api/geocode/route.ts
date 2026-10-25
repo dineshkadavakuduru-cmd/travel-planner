@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { verifyIdToken } from "@/lib/auth";
 import { rateLimit } from "@/lib/rateLimit";
-import { validateEnv } from "@/lib/validateEnv";
 
 export async function GET(request: Request) {
-  validateEnv();
   const decoded = await verifyIdToken(request).catch(() => null);
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const identity = decoded ? `user:${decoded.uid}` : `ip:${ip}`;

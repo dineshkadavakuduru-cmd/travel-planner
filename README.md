@@ -32,19 +32,19 @@ Firebase Admin credentials must remain server-only. Never prefix those values wi
 
 ## Environment variables
 
-Copy `.env.example` to `.env.local`. All values are validated at runtime by `src/lib/validateEnv.ts`.
+Copy `.env.example` to `.env.local`. `src/lib/validateEnv.ts` checks them at runtime: only `OPENAI_API_KEY` is required for generation to run. Everything else is optional and degrades gracefully, so a deployment that is missing a client or enrichment value still serves itineraries instead of failing with an HTTP 500.
 
 | Variable | Required | Client / Server | Where to get it |
 |---|---|---|---|
-| `OPENAI_API_KEY` | Yes | Server | OpenAI dashboard |
-| `GOOGLE_GEOCODING_API_KEY` | Yes | Server | Google Cloud Console (Geocoding API) |
-| `GOOGLE_PLACES_API_KEY` | Yes | Server | Google Cloud Console (Places API) |
+| `OPENAI_API_KEY` | Yes — generation stops with a clear 503 without it | Server | OpenAI dashboard |
+| `GOOGLE_GEOCODING_API_KEY` | No (globe pin + geocoding degrade) | Server | Google Cloud Console (Geocoding API) |
+| `GOOGLE_PLACES_API_KEY` | No (place enrichment off; coordinates skipped) | Server | Google Cloud Console (Places API) |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | No (maps degrade to placeholder) | Client | Google Cloud Console (Maps Static API). Restrict to Static Maps + HTTP referrers. Never used for secret calls — the browser only ever receives a server-built Static Maps URL from `/api/static-map`. |
 | `NEXT_PUBLIC_GOOGLE_MAP_ID` | No | Client | Optional custom map style ID |
-| `NEXT_PUBLIC_FIREBASE_*` (6 vars) | Yes | Client | Firebase Console → Project settings |
-| `FIREBASE_CLIENT_EMAIL` | Yes | Server only | Firebase service account |
-| `FIREBASE_PRIVATE_KEY` | Yes | Server only | Firebase service account (multiline). Never prefix with `NEXT_PUBLIC_` |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | No (dev fail-open) / Yes in production | Server | Upstash Console. Without these, rate limiting logs a warning and allows requests — set them in production. |
+| `NEXT_PUBLIC_FIREBASE_*` (6 vars) | No (app runs signed out) | Client only | Firebase Console → Project settings. Not needed by server routes. |
+| `FIREBASE_CLIENT_EMAIL` | Only for sign-in / saved trips | Server only | Firebase service account |
+| `FIREBASE_PRIVATE_KEY` | Only for sign-in / saved trips | Server only | Firebase service account (multiline). Never prefix with `NEXT_PUBLIC_` |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | No (fail-open) / recommended in production | Server | Upstash Console. Without these, rate limiting logs a warning and allows requests; a provider outage also fails open. |
 | `NEXT_PUBLIC_APP_URL` | No | Client | Deployed origin (e.g. `https://my-app.vercel.app`) |
 
 ## Architecture
@@ -68,7 +68,11 @@ Rate limits (Upstash Redis sliding window; fail-open with a warning when unconfi
 ## Troubleshooting
 
 - **Map not loading / "No location data"**: check that `GOOGLE_PLACES_API_KEY` is set (enrichment flag `enriched: false` means coordinates were skipped) and that the Static Maps API is enabled for the server key.
-- **Itinerary generation fails (400/502)**: verify `OPENAI_API_KEY` quota, request shape (`destination` 2–120 chars, `budget` 200–100000, `days` 1–14), and check server logs for "Itinerary generation error".
+- **Itinerary generation fails (400/502/503)**: the route now always answers with JSON, so check the body:
+  - `503 not_configured` — `OPENAI_API_KEY` is missing; set it and redeploy.
+  - `502 generation_failed` — provider error/quota or unusable model output; check server logs for "Itinerary generation failed".
+  - `400 invalid_request` — request shape (`destination` 2–120 chars, `budget` 200–100000 USD-equivalent, `days` 1–14).
+  Missing `NEXT_PUBLIC_FIREBASE_*` or `GOOGLE_*` values no longer cause a 500; those features degrade.
 - **Sign in doesn't work**: check Firebase Auth authorized domains include your origin, and that all `NEXT_PUBLIC_FIREBASE_*` values match the Firebase project.
 - **401 on `/api/trips`**: the request needs `Authorization: Bearer <Firebase ID token>`; `userId` must equal the token's `uid`; single-trip reads allow public trips without auth.
 - **429 rate limit hit**: generation is 5/hr (anon) / 20/hr (signed in); geocode is 30/min (anon) / 120/min (signed in). `Retry-After` header gives seconds to wait; configure Upstash in production.

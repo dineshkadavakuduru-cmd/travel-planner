@@ -19,23 +19,36 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export async function POST(request: Request) {
-  validateEnv();
-  const decoded = await verifyIdToken(request).catch(() => null);
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-  const identity = decoded ? `user:${decoded.uid}` : `ip:${ip}`;
-  const limit = await rateLimit(`generate:${identity}`, decoded ? 20 : 5, 60 * 60 * 1000);
-  if (!limit.allowed) {
+  // Non-throwing config check. A missing key must produce a clear, retryable
+  // response, never an opaque empty HTTP 500 that the client cannot parse.
+  const env = validateEnv();
+  if (!env.ok) {
     return NextResponse.json(
-      { error: "Generation limit reached. Try again later." }, 
-      { status: 429, headers: { "Retry-After": String(limit.retryAfter || 3600) } }
+      {
+        error: "Itinerary generation is temporarily unavailable. Please try again in a moment.",
+        code: "not_configured",
+        retryable: true,
+      },
+      { status: 503 }
     );
   }
 
   try {
+    const decoded = await verifyIdToken(request).catch(() => null);
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    const identity = decoded ? `user:${decoded.uid}` : `ip:${ip}`;
+    const limit = await rateLimit(`generate:${identity}`, decoded ? 20 : 5, 60 * 60 * 1000);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { error: "Generation limit reached. Try again later.", code: "rate_limited", retryable: true },
+        { status: 429, headers: { "Retry-After": String(limit.retryAfter || 3600) } }
+      );
+    }
+
     const parsedRequest = tripRequestSchema.safeParse(await request.json());
     if (!parsedRequest.success) {
       return NextResponse.json(
-        { error: "Invalid trip request", details: parsedRequest.error.flatten() }, 
+        { error: "Those trip details are not valid. Please adjust them and try again.", code: "invalid_request", retryable: false, details: parsedRequest.error.flatten() },
         { status: 400 }
       );
     }
@@ -95,8 +108,11 @@ Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommod
     }
 
     if (!itinerary) {
+      // The provider failed or returned unusable data. Log the real cause and
+      // return a stable, user-actionable message — never a fabricated trip.
+      console.error("Itinerary generation failed:", lastError);
       return NextResponse.json(
-        { error: lastError?.message || "The itinerary response was invalid. Please try again." },
+        { error: "We couldn't build your itinerary just now. Your details are saved — please try again.", code: "generation_failed", retryable: true },
         { status: 502 }
       );
     }
@@ -170,8 +186,14 @@ Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommod
   } catch (error) {
     console.error("Itinerary generation error:", error);
     if (error instanceof SyntaxError) {
-      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+      return NextResponse.json(
+        { error: "We couldn't read those trip details. Please try again.", code: "invalid_body", retryable: false },
+        { status: 400 }
+      );
     }
-    return NextResponse.json({ error: "Failed to generate itinerary" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Something went wrong while building your itinerary. Please try again.", code: "generation_error", retryable: true },
+      { status: 500 }
+    );
   }
 }
