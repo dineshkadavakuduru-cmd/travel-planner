@@ -9,6 +9,9 @@
     "lint": "eslint",
     "test": "vitest run"
   },
+  "overrides": {
+    "jwks-rsa": "^3.1.0"
+  },
   "dependencies": {
     "@googlemaps/js-api-loader": "^1.16.0",
     "@react-three/drei": "^10.0.6",
