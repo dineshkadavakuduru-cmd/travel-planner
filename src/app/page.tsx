@@ -29,6 +29,8 @@ gsap.registerPlugin(ScrollTrigger);
 
 const CURRENCY_LIST = CURRENCY_CODES;
 
+type DestinationSuggestion = { formattedAddress: string; lat: number; lng: number };
+
 const POPULAR_TRIPS: Array<{
   destination: string;
   days: number;
@@ -67,9 +69,8 @@ function formatRateTimestamp(iso: string | null): string | null {
   return `${formatted} UTC`;
 }
 
-function HomeInner() {
+function HomeForm({ searchParams }: { searchParams: ReturnType<typeof useSearchParams> }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const getParam = useCallback((k: string) => searchParams.get(k) ?? "", [searchParams]);
   const { data: marketRates } = useExchangeRates();
 
@@ -103,8 +104,8 @@ function HomeInner() {
   const [dateStart, setDateStart] = useState(() => getParam("travelDatesStart"));
   const [dateEnd, setDateEnd] = useState(() => getParam("travelDatesEnd"));
 
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [geoWarning, setGeoWarning] = useState<string | null>(null);
+  const [selectedDestination, setSelectedDestination] = useState<DestinationSuggestion | null>(null);
+  const [geocode, setGeocode] = useState<{ query: string; suggestions: DestinationSuggestion[]; warning?: string } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [globeVisible, setGlobeVisible] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -171,30 +172,44 @@ function HomeInner() {
     return () => ctx.revert();
   }, []);
 
+  const query = destination.trim();
+  const currentGeocode = geocode?.query === query ? geocode : null;
+  const suggestions = currentGeocode?.suggestions ?? [];
+  const coords = selectedDestination ?? suggestions[0] ?? null;
+  const geoWarning = currentGeocode?.warning;
+  const showSuggestions = !selectedDestination && suggestions.some(({ formattedAddress }) => formattedAddress !== query);
+
   useEffect(() => {
-    if (destination.trim().length < 3) return;
+    if (query.length < 3 || selectedDestination) return;
     const ctrl = new AbortController();
     const timeout = window.setTimeout(async () => {
       try {
-        const res = await fetch(`/api/geocode?address=${encodeURIComponent(destination.trim())}`, { signal: ctrl.signal });
+        const res = await fetch(`/api/geocode?address=${encodeURIComponent(query)}`, { signal: ctrl.signal });
         if (!res.ok) {
-          setCoords(null);
-          setGeoWarning(res.status === 404 ? "We couldn't pin this destination on the globe — you can still generate the trip." : null);
+          if (!ctrl.signal.aborted) {
+            setGeocode({
+              query,
+              suggestions: [],
+              warning: res.status === 404
+                ? "No matching destinations. You can use the destination you typed."
+                : "Destination suggestions are unavailable. You can use the destination you typed.",
+            });
+          }
           return;
         }
-        const data = await res.json();
-        setCoords({ lat: data.lat, lng: data.lng });
-        setGeoWarning(null);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setCoords(null);
+        const data: { suggestions: DestinationSuggestion[] } = await res.json();
+        if (!ctrl.signal.aborted) setGeocode({ query, suggestions: data.suggestions });
+      } catch {
+        if (!ctrl.signal.aborted) {
+          setGeocode({ query, suggestions: [], warning: "Destination suggestions are unavailable. You can use the destination you typed." });
+        }
       }
     }, 500);
     return () => {
       window.clearTimeout(timeout);
       ctrl.abort();
     };
-  }, [destination]);
+  }, [query, selectedDestination]);
 
   const destError = !touched ? null
     : destination.trim().length === 0 ? "Destination is required."
@@ -267,6 +282,7 @@ function HomeInner() {
 
   const applyPopularTrip = useCallback((t: typeof POPULAR_TRIPS[number]) => {
     setDestination(t.destination);
+    setSelectedDestination(null);
     setDays(t.days);
     setBudget(Math.round(convertCurrency(t.budgetUSD, "USD", currency)));
     setTouched(false);
@@ -320,10 +336,7 @@ function HomeInner() {
                   value={destination}
                   onChange={(e) => {
                     setDestination(e.target.value);
-                    if (e.target.value.trim().length < 3) {
-                      setCoords(null);
-                      setGeoWarning(null);
-                    }
+                    setSelectedDestination(null);
                   }}
                   placeholder="e.g. Tokyo, Japan"
                   aria-invalid={destError ? true : undefined}
@@ -332,6 +345,28 @@ function HomeInner() {
                 />
                 {destError ? <p id="destination-error" role="alert" className="mt-2 font-mono text-xs text-coral-warm">{destError}</p> : null}
                 {!destError && geoWarning ? <p id="destination-geo" role="status" className="mt-2 font-mono text-xs text-sand-light/60">{geoWarning}</p> : null}
+                {showSuggestions ? (
+                  <div className="mt-2 rounded-lg border border-sand-light/20 bg-bg-deep/50">
+                    <ul aria-label="Destination suggestions">
+                      {suggestions.map((suggestion, index) => (
+                        <li key={`${suggestion.formattedAddress}-${index}`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDestination(suggestion.formattedAddress);
+                              setSelectedDestination(suggestion);
+                              document.getElementById("destination")?.focus();
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm text-sand-light hover:bg-gold-brass/10 focus-visible:outline-2 focus-visible:outline-gold-brass"
+                          >
+                            {suggestion.formattedAddress}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <p translate="no" className="px-4 py-2 text-xs text-white whitespace-nowrap">Google Maps</p>
+                  </div>
+                ) : null}
               </div>
 
               <fieldset>
@@ -529,6 +564,11 @@ function HomeInner() {
       </div>
     </main>
   );
+}
+
+function HomeInner() {
+  const searchParams = useSearchParams();
+  return <HomeForm key={searchParams.toString()} searchParams={searchParams} />;
 }
 
 export default function Home() {

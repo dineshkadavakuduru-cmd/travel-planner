@@ -7,31 +7,25 @@ import { verifyIdToken } from "@/lib/auth";
 import type { ItineraryResponse, Trip } from "@/lib/types";
 import { CURRENT_TRIP_SCHEMA_VERSION, convertCurrency } from "@/lib/types";
 
-const GENERATION_TIMEOUT_MS = 90000;
-const ENRICHMENT_TIMEOUT_MS = 15000;
+export const maxDuration = 95;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+const GENERATION_TIMEOUT_MS = 75000;
+const MODEL = "gpt-4o-mini";
+
+function generationUnavailable(code: "not_configured" | "provider_configuration") {
+  return NextResponse.json(
+    {
+      error: "Itinerary generation is unavailable. Your trip details are kept here. Come back once service is restored.",
+      code,
+      retryable: false,
+    },
+    { status: 503 }
+  );
 }
 
 export async function POST(request: Request) {
-  // Non-throwing config check. A missing key must produce a clear, retryable
-  // response, never an opaque empty HTTP 500 that the client cannot parse.
   const env = validateEnv();
-  if (!env.ok) {
-    return NextResponse.json(
-      {
-        error: "Itinerary generation is temporarily unavailable. Please try again in a moment.",
-        code: "not_configured",
-        retryable: true,
-      },
-      { status: 503 }
-    );
-  }
+  if (!env.ok) return generationUnavailable("not_configured");
 
   try {
     const decoded = await verifyIdToken(request).catch(() => null);
@@ -54,34 +48,32 @@ export async function POST(request: Request) {
     }
 
     const { destination, origin, budget, days: tripDays, currency = "USD", options } = parsedRequest.data;
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: GENERATION_TIMEOUT_MS });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY?.trim(), maxRetries: 0 });
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(GENERATION_TIMEOUT_MS)]);
 
     const budgetUSD = convertCurrency(budget, currency, "USD");
+    const travelDates = options?.travelDates;
 
     const systemPrompt = `You are a travel itinerary planner. Given a destination, trip length, budget, and preferences, return ONLY valid JSON matching this shape:
 {"days":[{"dayNumber":1,"theme":"short descriptive theme","spots":[{"name":"","description":"1-2 specific sentences","estTimeMinutes":60}],"food":[{"name":"","cuisine":"","priceTier":"budget|mid|splurge"}]}],"totalEstCost":0}
-Recommend real, specific named places. Balance each day realistically, stay within budget, and output JSON only.
+Recommend real, specific named places. Return exactly the requested number of days, numbered consecutively from 1. Balance each day realistically, stay within budget, and output JSON only. Express totalEstCost as a number in USD.
 Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommodationLevel || "mid"}. Transport: ${options?.transportPreference || "mixed"}. Travelers: ${options?.travelers || 1}.`;
 
     let itinerary: ItineraryResponse | null = null;
     let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt < 2 && !itinerary; attempt += 1) {
+    for (let attempt = 0; attempt < 2 && !itinerary && !signal.aborted; attempt += 1) {
       try {
-        const completion = await withTimeout(
-          openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: `Destination: ${destination}, Origin: ${origin || "Unknown"}, Budget: $${budgetUSD}, Days: ${tripDays}, Currency: ${currency}, Travelers: ${options?.travelers || 1}` },
-            ],
-            response_format: { type: "json_object" },
-            temperature: 0.7,
-            max_tokens: 4000,
-          }),
-          GENERATION_TIMEOUT_MS,
-          "AI generation"
-        );
+        const completion = await openai.chat.completions.create({
+          model: MODEL,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Destination: ${destination}, Origin: ${origin || "Unknown"}, Budget: ${budgetUSD} USD, Days: ${tripDays}, Travel dates: ${travelDates ? `${travelDates.start} to ${travelDates.end}` : "Flexible"}` },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+          max_tokens: Math.max(4000, 550 * tripDays),
+        }, { signal });
 
         const content = completion.choices[0]?.message?.content;
         if (!content) {
@@ -91,19 +83,25 @@ Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommod
 
         try {
           const result = itinerarySchema.safeParse(JSON.parse(content));
-          if (result.success) {
+          if (result.success && result.data.days.length === tripDays &&
+              new Set(result.data.days.map((day) => day.dayNumber)).size === tripDays &&
+              result.data.days.every((day) => day.dayNumber <= tripDays && day.spots.length > 0)) {
             itinerary = result.data;
           } else {
-            lastError = new Error(`Invalid itinerary format: ${JSON.stringify(result.error.flatten())}`);
+            lastError = new Error("Invalid itinerary format or day sequence");
           }
         } catch {
           lastError = new Error("Failed to parse AI response as JSON");
         }
       } catch (err) {
-        lastError = err instanceof Error ? err : new Error("Unknown error");
-        if (err instanceof DOMException && err.name === "AbortError") {
-          lastError = new Error("AI generation timed out");
+        if (err instanceof OpenAI.APIError) {
+          console.error("OpenAI generation request failed:", { model: MODEL, status: err.status, code: err.code });
+          if ([401, 403, 404].includes(err.status ?? 0) || err.code === "insufficient_quota" || err.code === "billing_hard_limit_reached") {
+            return generationUnavailable("provider_configuration");
+          }
         }
+        lastError = new Error(signal.aborted ? "AI generation aborted or timed out" : "AI provider request failed");
+        break;
       }
     }
 
@@ -118,50 +116,40 @@ Style: ${options?.travelStyle || "balanced"}. Accommodation: ${options?.accommod
     }
 
     // Guarantee day ordering regardless of model output order.
-    itinerary.days = [...itinerary.days]
-      .sort((a, b) => a.dayNumber - b.dayNumber)
-      .slice(0, tripDays)
-      .map((day, i) => ({ ...day, dayNumber: i + 1 }));
+    itinerary.days.sort((a, b) => a.dayNumber - b.dayNumber);
 
-    const googleApiKey = process.env.GOOGLE_PLACES_API_KEY;
+    const googleApiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
     let enriched = false;
-    if (googleApiKey) {
+    if (googleApiKey && !googleApiKey.startsWith("your_")) {
       const lookups = itinerary.days.flatMap((day) => [
         ...day.spots.map((spot) => ({ item: spot, query: `${spot.name} ${destination}` })),
         ...day.food.map((food) => ({ item: food, query: `${food.name} ${food.cuisine} ${destination}` })),
       ]);
-      try {
-        await withTimeout(
-          Promise.allSettled(
-            lookups.map(async ({ item, query }) => {
-              const ctrl = new AbortController();
-              const t = setTimeout(() => ctrl.abort(), 8000);
-              try {
-                const searchRes = await fetch(
-                  `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${googleApiKey}`,
-                  { signal: ctrl.signal }
-                );
-                if (!searchRes.ok) return;
-                const searchData = await searchRes.json();
-                const place = searchData.results?.[0];
-                if (!place) return;
-                item.placeId = place.place_id;
-                item.lat = place.geometry?.location?.lat;
-                item.lng = place.geometry?.location?.lng;
-              } catch {
-                // Per-lookup failure must not fail generation.
-              } finally {
-                clearTimeout(t);
-              }
-            })
-          ),
-          ENRICHMENT_TIMEOUT_MS,
-          "Place enrichment"
+      const placesSignal = AbortSignal.any([request.signal, AbortSignal.timeout(8000)]);
+      const failures = new Set<string>();
+      const results = await Promise.allSettled(lookups.map(async ({ item, query }) => {
+        const params = new URLSearchParams({ query, key: googleApiKey });
+        const response = await fetch(
+          `https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`,
+          { signal: placesSignal }
         );
-        enriched = true;
-      } catch {
-        enriched = false; // Serve un-enriched itinerary rather than failing.
-      }
+        const data = await response.json();
+        if (data.status === "ZERO_RESULTS") return false;
+        if (!response.ok || data.status !== "OK") {
+          failures.add(`HTTP ${response.status} (${data.status ?? "unknown"})`);
+          return false;
+        }
+        const place = data.results?.[0];
+        const location = place?.geometry?.location;
+        if (!place?.place_id || !Number.isFinite(location?.lat) || !Number.isFinite(location?.lng)) return false;
+        item.placeId = place.place_id;
+        item.lat = location.lat;
+        item.lng = location.lng;
+        return true;
+      }));
+      enriched = results.some((result) => result.status === "fulfilled" && result.value);
+      if (results.some((result) => result.status === "rejected")) failures.add("Request or response failed");
+      if (failures.size) console.warn("Places enrichment failed:", [...failures].join(", "));
     }
 
     const totalEstCost = convertCurrency(Math.round(itinerary.totalEstCost), "USD", currency);

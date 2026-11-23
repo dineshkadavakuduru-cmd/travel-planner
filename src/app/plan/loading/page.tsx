@@ -6,7 +6,9 @@ import { useAuth } from "@/components/AuthProvider";
 import { CURRENCY_CODES, USD_BUDGET_MAX, USD_BUDGET_MIN, convertCurrency } from "@/lib/types";
 import type { Currency, TripOptions } from "@/lib/types";
 
-const CLIENT_TIMEOUT_MS = 95000;
+const CLIENT_TIMEOUT_MS = 100000;
+
+type GenerationError = { message: string; retryable: boolean };
 
 const STAGES = [
   "Finding the best spots in {destination}...",
@@ -43,10 +45,8 @@ function PlanLoadingInner({
   const searchParamsClient = useSearchParams();
   const { user, loading: authLoading } = useAuth();
   const [stageIndex, setStageIndex] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [isRetrying, setIsRetrying] = useState(false);
+  const [error, setError] = useState<GenerationError | null>(null);
   const [status, setStatus] = useState<"loading" | "ready">("loading");
-  const hasGeneratedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const rawDestination = (params.destination || "").trim();
@@ -87,32 +87,33 @@ function PlanLoadingInner({
           : null;
 
   useEffect(() => {
-    const stageMessages = STAGES.map((s) => s.replace("{destination}", destination));
+    if (authLoading || error || status === "ready") return;
     const interval = setInterval(() => {
       setStageIndex((prev) => {
-        if (prev < stageMessages.length - 1) return prev + 1;
+        if (prev < STAGES.length - 1) return prev + 1;
         clearInterval(interval);
         return prev;
       });
     }, 800);
 
     return () => clearInterval(interval);
-  }, [destination]);
+  }, [authLoading, error, status]);
 
   const startTimeRef = useRef<number>(0);
-  const generateItinerary = useCallback(async (isRetry = false) => {
-    if (paramError) { setError(paramError); return; }
-    if (hasGeneratedRef.current && !isRetry) return;
-    hasGeneratedRef.current = true;
+  const generateItinerary = useCallback(async () => {
+    if (paramError) {
+      setError({ message: paramError, retryable: false });
+      return;
+    }
+    if (abortControllerRef.current) return;
     setError(null);
     setStatus("loading");
-    setIsRetrying(true);
+    setStageIndex(0);
     startTimeRef.current = Date.now();
 
-    abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const clientTimer = setTimeout(() => controller.abort(new Error("Generation timed out. Please retry.")), CLIENT_TIMEOUT_MS);
+    const clientTimer = setTimeout(() => controller.abort(new DOMException("Generation timed out.", "TimeoutError")), CLIENT_TIMEOUT_MS);
 
     try {
       const token = user ? await user.getIdToken() : null;
@@ -135,9 +136,13 @@ function PlanLoadingInner({
 
       let data: unknown = null;
       try { data = await res.json(); } catch { data = null; }
+      controller.signal.throwIfAborted();
       if (!res.ok) {
-        const msg = (data as { error?: string } | null)?.error || `Generation failed (HTTP ${res.status}). Please retry.`;
-        throw new Error(msg);
+        const failure = data as { error?: string; retryable?: boolean; code?: string } | null;
+        const retryable = failure?.code !== "not_configured" && failure?.code !== "provider_configuration"
+          && (failure?.retryable ?? (res.status >= 500 || res.status === 429));
+        setError({ message: failure?.error || `Generation failed (HTTP ${res.status}).`, retryable });
+        return;
       }
 
       const trip = data as Record<string, unknown>;
@@ -171,31 +176,30 @@ function PlanLoadingInner({
       // the itinerary is legible instead of an unexplained jump.
       setStatus("ready");
       await new Promise((resolve) => setTimeout(resolve, 450));
+      controller.signal.throwIfAborted();
       router.push(`/trip/${tripId}`);
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        setError("Generation timed out. Please retry.");
-        return;
-      }
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      if (abortControllerRef.current !== controller) return;
+      const message = controller.signal.aborted
+        ? "Generation timed out. Please retry."
+        : err instanceof Error ? err.message : "Something went wrong.";
+      setError({ message, retryable: true });
     } finally {
       clearTimeout(clientTimer);
-      setIsRetrying(false);
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
     }
   }, [paramError, rawDestination, origin, budget, days, currency, options, router, user]);
 
   useEffect(() => {
     if (authLoading) return;
-    // Kick off generation once auth resolves; state updates happen in async callbacks below.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void generateItinerary();
+    const start = setTimeout(() => void generateItinerary(), 0);
 
     return () => {
+      clearTimeout(start);
       abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
     };
   }, [authLoading, generateItinerary]);
-
-  const handleRetry = () => generateItinerary(true);
 
   const handleEditTrip = () => {
     const params = new URLSearchParams(searchParamsClient);
@@ -212,18 +216,19 @@ function PlanLoadingInner({
           <h2 className="font-display text-2xl sm:text-3xl font-bold text-sand-light mb-4">
             We couldn&apos;t chart this trip
           </h2>
-          <p className="font-body text-sm text-coral-warm mb-3">{error}</p>
+          <p className="font-body text-sm text-coral-warm mb-3">{error.message}</p>
           <p className="font-mono text-xs text-sand-light/60 mb-6">
-            Your itinerary was not created. Retry the same trip, or edit your details first.
+            {error.retryable ? "Retry this trip or edit your details." : "You can return to the form with your trip details filled in."}
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <button
-              onClick={handleRetry}
-              disabled={isRetrying}
-              className="font-mono text-sm px-6 py-3 bg-gold-brass text-bg-deep rounded-lg hover:bg-gold-brass/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass focus:ring-offset-2 focus:ring-offset-bg-deep"
-            >
-              {isRetrying ? "Retrying..." : "Retry"}
-            </button>
+            {error.retryable ? (
+              <button
+                onClick={() => void generateItinerary()}
+                className="font-mono text-sm px-6 py-3 bg-gold-brass text-bg-deep rounded-lg hover:bg-gold-brass/90 transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass focus:ring-offset-2 focus:ring-offset-bg-deep"
+              >
+                Retry
+              </button>
+            ) : null}
             <button
               onClick={handleEditTrip}
               className="font-mono text-sm px-6 py-3 border border-gold-brass/40 text-gold-brass rounded-lg hover:bg-gold-brass/10 transition-colors focus:outline-none focus:ring-2 focus:ring-gold-brass focus:ring-offset-2 focus:ring-offset-bg-deep"

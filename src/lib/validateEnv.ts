@@ -15,7 +15,7 @@
  *   /api/static-map). Server routes must never require them.
  *
  * `validateEnv()` never throws. It returns a report so routes can answer with
- * a clear, retryable JSON error, and it logs the same problems once.
+ * a clear JSON error, and it logs the same problems once.
  */
 
 const SERVER_REQUIRED_ENV_VARS = ["OPENAI_API_KEY"] as const;
@@ -64,7 +64,9 @@ export function checkEnv(): EnvReport {
   const misconfigured: string[] = [];
 
   for (const key of SERVER_REQUIRED_ENV_VARS) {
-    if (!process.env[key]) missingRequired.push(key);
+    const value = process.env[key]?.trim();
+    if (!value) missingRequired.push(key);
+    else if (isPlaceholder(value)) misconfigured.push(`${key} is still set to its .env.example placeholder`);
   }
 
   for (const key of SERVER_OPTIONAL_ENV_VARS) {
@@ -86,7 +88,7 @@ export function checkEnv(): EnvReport {
   }
 
   return {
-    ok: missingRequired.length === 0,
+    ok: missingRequired.length === 0 && isGenerationConfigured(),
     missingRequired,
     missingOptional,
     misconfigured,
@@ -113,7 +115,7 @@ export function validateEnv(): EnvReport {
     }
     if (report.ok) {
       console.log("✓ Required environment variables validated");
-    } else {
+    } else if (report.missingRequired.length) {
       console.error(`Missing required environment variables: ${report.missingRequired.join(", ")}`);
     }
   }
@@ -123,7 +125,8 @@ export function validateEnv(): EnvReport {
 
 /** True when itinerary generation has the key it needs. */
 export function isGenerationConfigured(): boolean {
-  return Boolean(process.env.OPENAI_API_KEY);
+  const key = process.env.OPENAI_API_KEY?.trim();
+  return Boolean(key && !isPlaceholder(key));
 }
 
 export function isPlacesApiConfigured(): boolean {

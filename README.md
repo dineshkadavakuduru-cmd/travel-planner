@@ -37,8 +37,8 @@ Copy `.env.example` to `.env.local`. `src/lib/validateEnv.ts` checks them at run
 | Variable | Required | Client / Server | Where to get it |
 |---|---|---|---|
 | `OPENAI_API_KEY` | Yes — generation stops with a clear 503 without it | Server | OpenAI dashboard |
-| `GOOGLE_GEOCODING_API_KEY` | No (globe pin + geocoding degrade) | Server | Google Cloud Console (Geocoding API) |
-| `GOOGLE_PLACES_API_KEY` | No (place enrichment off; coordinates skipped) | Server | Google Cloud Console (Places API) |
+| `GOOGLE_GEOCODING_API_KEY` | For destination suggestions and globe pins | Server | Google Cloud Console (Geocoding API) |
+| `GOOGLE_PLACES_API_KEY` | For place enrichment | Server | Google Cloud Console (Places API Legacy Text Search) |
 | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | No (maps degrade to placeholder) | Client | Google Cloud Console (Maps Static API). Restrict to Static Maps + HTTP referrers. Never used for secret calls — the browser only ever receives a server-built Static Maps URL from `/api/static-map`. |
 | `NEXT_PUBLIC_GOOGLE_MAP_ID` | No | Client | Optional custom map style ID |
 | `NEXT_PUBLIC_FIREBASE_*` (6 vars) | No (app runs signed out) | Client only | Firebase Console → Project settings. Not needed by server routes. |
@@ -69,8 +69,9 @@ Rate limits (Upstash Redis sliding window; fail-open with a warning when unconfi
 
 - **Map not loading / "No location data"**: check that `GOOGLE_PLACES_API_KEY` is set (enrichment flag `enriched: false` means coordinates were skipped) and that the Static Maps API is enabled for the server key.
 - **Itinerary generation fails (400/502/503)**: the route now always answers with JSON, so check the body:
-  - `503 not_configured` — `OPENAI_API_KEY` is missing; set it and redeploy.
-  - `502 generation_failed` — provider error/quota or unusable model output; check server logs for "Itinerary generation failed".
+  - `503 not_configured` — add a valid `OPENAI_API_KEY` and redeploy.
+  - `503 provider_configuration` — check the OpenAI key's permissions, access to `gpt-4o-mini`, billing and quota. The trip remains available to edit.
+  - `502 generation_failed` — a temporary provider error or unusable model output. The traveler can retry with the same details.
   - `400 invalid_request` — request shape (`destination` 2–120 chars, `budget` 200–100000 USD-equivalent, `days` 1–14).
   Missing `NEXT_PUBLIC_FIREBASE_*` or `GOOGLE_*` values no longer cause a 500; those features degrade.
 - **Sign in doesn't work**: check Firebase Auth authorized domains include your origin, and that all `NEXT_PUBLIC_FIREBASE_*` values match the Firebase project.
@@ -80,9 +81,10 @@ Rate limits (Upstash Redis sliding window; fail-open with a warning when unconfi
 
 ## Deployment checklist (Vercel)
 
-1. Add every `.env.local` value to Vercel project environment settings, including Firebase Admin credentials and Upstash tokens.
+1. Add approved `OPENAI_API_KEY`, `GOOGLE_GEOCODING_API_KEY`, `GOOGLE_PLACES_API_KEY`, `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` values to the Vercel **Production** environment as secrets. Use the Upstash Redis REST URL and read/write token from the same database. Add Firebase settings separately if sign-in and cloud saves are enabled.
 2. Set `NEXT_PUBLIC_APP_URL` to the deployed origin.
 3. Restrict Google keys separately: server keys (Places/Geocoding/Static) by IP or "none + API restriction"; the client Maps key by HTTP referrer to your domain, Static Maps API only.
 4. Deploy `firestore.rules` with the Firebase CLI (`firebase deploy --only firestore:rules`).
 5. Add the deployed domain to Firebase Auth authorized domains.
 6. Run `npm run lint`, `npm test`, and `npm run build` in CI before promoting.
+7. On the new production deployment, type Tokyo and select a destination suggestion. Choose the Tokyo sample and submit in a non-USD currency. Check for five days, an estimated cost in that currency, and place enrichment. Use a preview without provider credentials to verify that manual destination entry works and that a generation configuration error offers **Edit Trip** with the submitted details intact.
